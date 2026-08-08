@@ -1,5 +1,8 @@
 # personal-soc
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![guard](https://github.com/ToddGBenson/personal-soc/actions/workflows/guard.yml/badge.svg)](.github/workflows/guard.yml)
+
 A small suite of [Claude Code](https://claude.com/claude-code) **skills** that act as a security operations center scoped to one person and one home. Each skill is a repeatable, safety-gated process with an on-demand reference knowledgebase (the "RAG") and — where useful — helper scripts.
 
 Built defensively: read-only and non-destructive by default, authorization-gated, and strict about keeping personal data out of version control.
@@ -29,6 +32,8 @@ The skills are shareable; **your data is not.** Two files hold personal informat
 
 This repo ships only sanitized templates: `profile.example.md` and `identifiers.example.md`. To use the skill, copy each `.example.md` to its real name and fill it in locally. Engagement output (`personal-monitor/`, `netassess/`, scan logs, findings) is gitignored too.
 
+The shared skill files also use **generic examples** (placeholder MACs, IPs, and profiles) — personalization lives only in your local, gitignored copies. A continuous check ([`.github/workflows/guard.yml`](.github/workflows/guard.yml)) fails the build if a filled `profile.md` or `identifiers.md` is ever committed.
+
 > Tip: keep the filled `profile.md` / `identifiers.md` physically outside the repo and symlink them in, so an accidental `git add -A` can't scoop them up.
 
 ## Install
@@ -45,3 +50,13 @@ Then invoke by asking for it — e.g. "assess my network", "check my digital foo
 ## Scope & ethics
 
 For defending networks and identities **you own or are authorized to assess**. Not for scanning third-party networks or profiling other people. Each skill's `rules-of-engagement.md` / `controls.md` defines the boundaries; follow them.
+
+## Repository
+
+- **License:** [MIT](LICENSE).
+- **Security policy:** report issues privately via [SECURITY.md](SECURITY.md) (GitHub private advisory); no public issues for security-sensitive reports.
+- **Integrity:** `main` is branch-protected (no force-push, no deletion, linear history required); GitHub **secret scanning + push protection** are enabled; the [`guard`](.github/workflows/guard.yml) workflow blocks personal data from ever being committed.
+
+---
+
+_Last updated: 2026-08-08 — documented LICENSE, SECURITY policy, and the CI guard added during public release; noted that shared skill files use generic examples with personalization kept local._
