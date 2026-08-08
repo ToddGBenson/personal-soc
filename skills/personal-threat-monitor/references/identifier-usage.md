@@ -12,7 +12,7 @@ Read `identifiers.md` at the start of each run and expand both checks with it. R
 - **Each employer** → professional records, work-email-pattern inference, employer-breach exposure.
 - **Domains** → WHOIS-history for leaked historical registrant PII; **wallet addresses** → on-chain linkage.
 
-**Disambiguation rule (this is what historical identifiers are *for*):** a broker/breach record is attributed to the user only when it corroborates on ≥2 ledger facts (e.g. a prior address **[D]** + a known employer, or an old email + DOB). Records that match name alone go in an "unconfirmed / possible collision" bucket — never merged into the profile. This is how you keep the other 10 Todd Bensons out of the report.
+**Disambiguation rule (this is what historical identifiers are *for*):** a broker/breach record is attributed to the user only when it corroborates on ≥2 ledger facts (e.g. a prior address **[D]** + a known employer, or an old email + DOB). Records that match name alone go in an "unconfirmed / possible collision" bucket — never merged into the profile. This is how you keep other people who share the user's name out of the report.
 
 **Output additions to `footprint.json`:** tag each finding with which identifier surfaced it, so removals can target the right record and you can see which *old* identifier is leaking.
 

@@ -17,7 +17,7 @@ Keep it short and scannable — one screen. Lead with what's new/actionable, not
 - <threat> [source]
 ### Health / medical
 - <threat> [source]
-### Family / eldercare  (+ Arizona locale)
+### Family / eldercare  (+ locale)
 - <threat> [source]
 
 ## In your inbox (if consented)

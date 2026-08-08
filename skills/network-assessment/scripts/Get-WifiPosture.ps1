@@ -10,7 +10,7 @@
 [CmdletBinding()]
 param(
   [Parameter(Mandatory)][string]$OutDir,
-  [string]$GatewayMac = ""                       # e.g. 70:F2:20:67:07:F0 to correlate the AP
+  [string]$GatewayMac = ""                       # e.g. AA:BB:CC:DD:EE:F0 to correlate the AP
 )
 $ErrorActionPreference = "Continue"
 function Log($msg){ Add-Content "$OutDir\scan-log.md" ("{0}  {1}" -f (Get-Date -Format 'yyyy-MM-dd HH:mm'), $msg) }

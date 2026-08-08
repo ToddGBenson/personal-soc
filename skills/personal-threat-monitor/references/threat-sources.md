@@ -14,7 +14,7 @@ How to build the weekly personalized brief: which sources to pull, mapped to the
 **1. Executive / security-leader (highest weight for this user)**
 - Whaling / BEC / vendor-impersonation trends; deepfake-voice and multi-channel (email+call+LinkedIn/Teams) campaigns; consultant/Big-Four impersonation.
 - Queries: `whaling OR BEC campaign <month year>`, `deepfake voice executive fraud <year>`, `consultant OR "professional services" impersonation phishing`.
-- Personalize: the user's public career graph (EY/Smarsh/CSAA/US-Courts) is recon fuel — call out pretexts that would use it.
+- Personalize: the user's public career graph (current + former employers) is recon fuel — call out pretexts that would use it.
 
 **2. Financial / investment / crypto**
 - Account-takeover, SIM-swap→drainer, crypto-drainer lures, fake investment portals, payment fraud.
@@ -30,10 +30,10 @@ How to build the weekly personalized brief: which sources to pull, mapped to the
 - Grandparent scams, benefit/tax/school fraud, romance/pig-butchering, and **package-delivery smishing** (very active).
 - Queries: `elder fraud warning <month year>`, `grandparent scam OR package smishing <year>`.
 
-## Locale overlay (Arizona / Phoenix)
+## Locale overlay (user's state / metro)
 
-- **AZ AG** (azag.gov) consumer alerts; **FBI Phoenix** field-office press releases; **AZ DIFI** (financial-exploitation alerts); AARP Arizona.
-- Query: `Arizona OR Phoenix scam alert <month year>`. AZ ranks among the worst states for elder-fraud losses — locale matters here.
+- The state **Attorney General** consumer alerts; the regional **FBI field office** press releases; the state **financial / insurance regulator**; the state AARP chapter.
+- Query: `<state OR metro> scam alert <month year>`. Some states rank far worse for elder-fraud losses — locale matters here.
 
 ## Correlate with the user's inbox (with consent)
 

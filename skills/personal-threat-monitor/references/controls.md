@@ -18,7 +18,7 @@ The safety layer for both checks. This skill touches sensitive PII, so the contr
 - Get explicit consent before reading the user's Gmail/Calendar/Drive/etc. Record the grant in `run-log.md`.
 - **Minimize:** query with metadata/snippets first; only open a full message body when a specific finding needs it, and note why.
 - Read-only. Never send, draft, label, delete, or modify the user's mail/accounts as part of monitoring.
-- Don't retain message contents in the report — record the *finding* (e.g. "OAuth grant to Fieldy, Feb 2026"), not the raw email.
+- Don't retain message contents in the report — record the *finding* (e.g. "OAuth grant to a third-party app, with date"), not the raw email.
 
 ## 4. Confidentiality of output
 

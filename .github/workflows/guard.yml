@@ -1,0 +1,27 @@
+name: guard
+
+# Fails the build if a confidential personal profile/ledger is ever committed.
+# Complements GitHub's native secret scanning (which catches known token formats).
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  no-personal-data:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Ensure no filled profile/identifier ledger is tracked
+        run: |
+          hits="$(git ls-files | grep -E '(^|/)(profile|identifiers)\.md$' || true)"
+          if [ -n "$hits" ]; then
+            echo "::error::Confidential personal file is tracked — only *.example.md may be committed:"
+            echo "$hits"
+            exit 1
+          fi
+          echo "OK: no profile.md / identifiers.md tracked (templates only)"

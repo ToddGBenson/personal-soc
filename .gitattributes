@@ -1,0 +1,10 @@
+# Normalize line endings on commit
+* text=auto
+
+# PowerShell scripts conventionally use CRLF
+*.ps1 text eol=crlf
+
+# Markdown and shell use LF
+*.md  text eol=lf
+*.sh  text eol=lf
+*.yml text eol=lf

@@ -33,7 +33,7 @@ If authorization is ambiguous, do not scan. Ask one direct question and wait.
 | **2 — Intrusive** | Authentication attempts, default-credential checks, write/delete tests, SNMP community guessing, deauth, active exploitation | **Requires explicit, specific, per-engagement authorization.** Default is NO. Prefer to *report the exposure* rather than prove it. |
 | **✕ — Never** | Credential brute force, exploitation for access, DoS/stress, config modification, data exfiltration, persistence, scanning out-of-scope hosts | Prohibited in a defensive assessment. Do not perform even if asked casually — confirm intent and authorization, and decline if it isn't legitimate authorized testing |
 
-Default posture is **Tier 0–1 only**. To prove a finding (e.g., that an NFS export is actually writable), stop at the least-intrusive demonstration — a directory *listing* proves unauthenticated read; do not write a test file, do not open documents. We confirmed the WD My Cloud exposure with `nfs-ls` at listing depth and went no further; that is the model.
+Default posture is **Tier 0–1 only**. To prove a finding (e.g., that an NFS export is actually writable), stop at the least-intrusive demonstration — a directory *listing* proves unauthenticated read; do not write a test file, do not open documents. For example, a WD My Cloud exporting NFS to `*` can be confirmed at listing depth with `nfs-ls` and taken no further; that is the model.
 
 ## 4. Hard stop conditions
 

@@ -100,7 +100,7 @@ netsh wlan show networks mode=bssid                  # over-the-air auth/cipher 
 Key checks:
 - **Encryption:** WPA3 vs WPA2 vs Open. A saved profile showing WPA3 while the over-the-air scan shows WPA2 for the same SSID = **WPA3 transition mode** (downgrade-attackable).
 - **Open SSIDs broadcasting in-home** — correlate strong-signal Open networks to a device (e.g. a Tuya/SmartLife gadget in setup mode).
-- **BSSID→gateway correlation:** if the SSID BSSIDs match the router's LAN MAC ±a few (e.g. `70:f2:20:67:07:f0` → `...f3/f4/f5`), the Wi-Fi is served by the gateway itself — relevant when the gateway is EOL.
+- **BSSID→gateway correlation:** if the SSID BSSIDs match the router's LAN MAC ±a few (e.g. `aa:bb:cc:dd:ee:f0` → `...f3/f4/f5`), the Wi-Fi is served by the gateway itself — relevant when the gateway is EOL.
 
 **Stop:** never attempt to connect to or capture handshakes from networks you don't own.
 

@@ -32,7 +32,7 @@ When the user wants removals (their selected default), pair each finding with a 
 
 ## Account-hygiene actions (from inbox findings)
 
-- **Review & revoke non-Claude OAuth grants** (Google Account → Security → Third-party access). Flagged example: Fieldy, "Microsoft apps & services."
+- **Review & revoke non-Claude OAuth grants** (Google Account → Security → Third-party access). Flagged example: any unfamiliar app — e.g. a third-party notetaker, or a broad "apps & services" grant.
 - **Verify unexpected passkeys/devices** (Google Account → Security → Passkeys / Your devices).
 - **Secure the linked `.sec` account** and confirm recovery settings on both.
-- **Password manager + unique passwords + hardware/passkey MFA** on the high-value accounts (email, financial, EY/work-adjacent).
+- **Password manager + unique passwords + hardware/passkey MFA** on the high-value accounts (email, financial, work-adjacent).
