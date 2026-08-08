@@ -1,0 +1,24 @@
+# === CONFIDENTIAL — never commit personal data ===
+# Filled personal profile & identifier ledger (keep only the *.example.md templates)
+**/references/profile.md
+**/references/identifiers.md
+
+# Engagement output / evidence (scans, findings, briefs, audit logs)
+personal-monitor/
+netassess/
+**/raw/
+*.local.*
+scan-log.md
+run-log.md
+inventory.csv
+findings.json
+footprint.json
+threat-brief.md
+
+# OS / editor cruft
+.DS_Store
+Thumbs.db
+desktop.ini
+*.swp
+.vscode/
+.idea/
