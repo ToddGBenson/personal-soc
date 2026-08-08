@@ -23,6 +23,13 @@ Two self-directed checks that keep the account owner informed about their own ex
 
 - **Safety:** self-directed only (won't profile third parties); public sources + your own consented accounts only; least-data access; findings kept local and never auto-published; a confidential **identifier ledger** with three handling classes — `[S]` search, `[D]` disambiguate-only, `[M]` monitor-only (sensitive IDs never stored in full).
 
+### `update-docs`
+Creates or updates documentation that stays true to the actual artifact. Every doc explains three things: its **Purpose/Goal/Outcome**, how it's **Constructed & Engineered**, and how it's **Used** — read from ground truth first, then verified before finishing.
+
+- **Discipline:** document what the code actually does (read the real thing before writing); update in place preserving voice; verify every command/path/example; record a "last updated" note.
+- **General-purpose** — not security-specific; included here to keep these skills' own docs current.
+- **Layout:** `SKILL.md` orchestrator · `references/` (doc-structure, process, style, templates) · `scripts/Find-DocDrift.ps1` (git-based documentation-drift detector).
+
 ## Personal data is not in this repo
 
 The skills are shareable; **your data is not.** Two files hold personal information and are **gitignored**:
@@ -59,4 +66,4 @@ For defending networks and identities **you own or are authorized to assess**. N
 
 ---
 
-_Last updated: 2026-08-08 — documented LICENSE, SECURITY policy, and the CI guard added during public release; noted that shared skill files use generic examples with personalization kept local._
+_Last updated: 2026-08-08 — added the `update-docs` skill; documented LICENSE, SECURITY policy, and the CI guard added during public release; noted that shared skill files use generic examples with personalization kept local._
