@@ -60,6 +60,11 @@ netassess/<YYYY-MM-DD>-<scope-label>/
 
 Assessment output is **confidential** — it is a map of someone's exposures. Keep it in the engagement folder, never send it to an external service, and when the user shares the report, remind them it reveals live weaknesses. Redact or caveat before any external distribution.
 
-## Repeatability
+## Repeatability, change detection & scoring
 
-To make this a recurring capability: re-run Phases 1–4 on a cadence (the `/schedule` or `/loop` skills can drive it), diff the new `inventory.csv` against the last engagement to surface new hosts / new open ports / regressions, and only regenerate the full report when something material changed. A new device on the segment or a newly opened port is the signal worth alerting on.
+To make this a recurring monitoring capability (ported from a production SOC's security automation), see `references/change-detection.md`:
+
+- Each run writes `findings.json` (`{id,title,severity,cis,status}`) + `inventory.csv` to `netassess/<date>/`.
+- **`scripts/Compare-Assessment.ps1 -Baseline <prev> -Current <this>`** diffs the two: resolved / new / severity-changed findings, host add/remove (MAC-level), and a **0–100 posture score with delta**.
+- Emit a **combined security digest** (network + OSINT + threat + score + changes) as the deliverable — severity-gated so only high/critical changes page.
+- Drive on a cadence with `/schedule` or `/loop`; lead with the delta, not a full re-dump. A new host or a newly opened critical is the signal worth alerting on.

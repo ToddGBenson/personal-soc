@@ -60,3 +60,5 @@ Keep everything local and confidential. If the user wants a formatted artifact, 
 ## Automation
 
 Both checks suit a weekly cadence. Use the `/schedule` skill to run a cloud agent (e.g. Monday mornings, aligned to the user's existing morning-brief routine), or `/loop` for a self-paced local run. Each scheduled run should: reload the profile, run A and B, diff against last week, and surface only what's **new or newly relevant** — a full re-dump every week trains the user to ignore it. Alert-worthy signals: a new broker listing, a new breach hit, a new device/OAuth grant, or a threat campaign that matches something in their inbox.
+
+**Combined digest.** Deliver the output as a single severity-gated digest that folds these two checks together with the network assessment's posture score and change detection — the "morning briefing" format (🔴 page / 🟠 nudge / ⚪ log). See the network-assessment skill's `references/change-detection.md` and the worked example at `netassess/<date>/security-digest.md`. This is the shape to hand to a schedule or push to notifications.
