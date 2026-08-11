@@ -49,6 +49,14 @@ $anon = (net view "\\$nasGuess" 2>&1 | Select-String 'Disk').Count
 $wifi = netsh wlan show networks mode=bssid | Out-String
 $openAP = if($wifi -match 'SmartLife-6A82'){'SmartLife-6A82 OPEN — broadcasting'} else {'no known open AP'}
 
+# external (WAN) exposure — what the internet sees (needs the home public IP, so it runs locally)
+& (Join-Path $PSScriptRoot 'Get-ExternalExposure.ps1') -OutDir $out *> "$out\raw\external-run.txt"
+$extPorts = 'n/a'
+if(Test-Path "$out\external-exposure.json"){
+  try { $ext = Get-Content "$out\external-exposure.json" -Raw | ConvertFrom-Json
+        $extPorts = if($ext.ports){ ($ext.ports -join ', ') } else { 'none visible' } } catch {}
+}
+
 @"
 ## Network status — $today (local scheduled scan)
 
@@ -57,6 +65,7 @@ $openAP = if($wifi -match 'SmartLife-6A82'){'SmartLife-6A82 OPEN — broadcastin
 - **NAS SMB:** $smbv1
 - **NAS anonymous shares listed:** $anon
 - **Open Wi-Fi AP:** $openAP
+- **WAN (external) ports visible:** $extPorts
 
 _Raw data + inventory.csv in $out. Full CIS findings + digest: run the network-assessment skill or fold into the weekly digest._
 "@ | Set-Content "$out\network-status.md"
