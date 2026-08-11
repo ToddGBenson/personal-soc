@@ -57,6 +57,12 @@ personal-monitor/<YYYY-MM-DD>/
 
 Keep everything local and confidential. If the user wants a formatted artifact, build it as a **local file** and let them choose whether to publish (per `controls.md`).
 
+## Accuracy & coverage add-ons
+
+- **Verify before asserting** (`references/verification.md`) — common-name OSINT hits are *candidates* until confirmed; keep them off the profile/report and on a `verify-checklist.md` until the user rules on them.
+- **Confirm breaches** (`scripts/Invoke-BreachCheck.ps1` + `references/breach-confirmation.md`) — HIBP/DeHashed turn "likely breached" into dated, confirmed exposure (needs a HIBP API key; never commit it).
+- **Beyond cyber** (`references/risk-domains.md`) — identity-theft, physical/home, travel/personal-safety, and financial-risk domains, surfaced in the digest only when active and applicable.
+
 ## Automation
 
 Both checks suit a weekly cadence. Use the `/schedule` skill to run a cloud agent (e.g. Monday mornings, aligned to the user's existing morning-brief routine), or `/loop` for a self-paced local run. Each scheduled run should: reload the profile, run A and B, diff against last week, and surface only what's **new or newly relevant** — a full re-dump every week trains the user to ignore it. Alert-worthy signals: a new broker listing, a new breach hit, a new device/OAuth grant, or a threat campaign that matches something in their inbox.

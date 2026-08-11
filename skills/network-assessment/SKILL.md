@@ -44,6 +44,8 @@ Pull the relevant reference into context only when the phase needs it:
 - `references/cis-controls-v8.md` — Phase 5. All 18 controls, what to verify on a home/SMB network, how to gather evidence, and the status rubric.
 - `references/remediation-library.md` — Phase 5–6. Reusable finding→remediation blocks so recommendations stay consistent and correct across engagements.
 - `references/report-outline.md` — Phase 6. Required report sections, the diagram set, and the severity model. Design each report fresh via the `artifact-design` + `artifact-diagramming` skills — the outline fixes *structure*, not visuals.
+- `references/vulnerability-scanning.md` — CVE matching (`scripts/Invoke-VulnScan.ps1`). Turns "port open" into "known-CVE finding" via version→CVE lookup. **Banner-based — verify before acting.**
+- `references/external-exposure.md` — WAN view (`scripts/Get-ExternalExposure.ps1`). What the internet sees of your public IP (Shodan InternetDB) — the perspective a NAT'd internal scan can't reach.
 
 ## Output & data handling
 
