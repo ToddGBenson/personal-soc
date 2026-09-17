@@ -15,7 +15,11 @@ jobs:
   no-personal-data:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      # Pinned to a commit SHA, not a tag: a tag is mutable, so `@v4` is a
+      # promise from whoever can move it rather than a fixed input to this
+      # build. Every other workflow in this estate pins this way; this file
+      # was the only exception.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
       - name: Ensure no filled profile/identifier ledger is tracked
         run: |
           hits="$(git ls-files | grep -E '(^|/)(profile|identifiers)\.md$' || true)"
