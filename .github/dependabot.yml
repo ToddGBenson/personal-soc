@@ -1,0 +1,46 @@
+# Dependency version updates (mykronos#270).
+#
+# This repository is PowerShell and Markdown — there are no package manifests,
+# which is why it had no `dependabot.yml`. But it does have one workflow, and
+# that workflow pins `actions/checkout` to a 40-character commit SHA. A SHA pin
+# is the right control and it is also a ratchet: nothing rolls it forward on its
+# own. `github-actions` is therefore the one ecosystem here that needs an
+# automated update path, and it is the one that was missing.
+#
+# The `cooldown` is the point of this file as much as the schedule is. Without
+# one, Dependabot proposes a version the hour it is published — exactly the
+# window in which a hijacked maintainer account or a compromised publish
+# pipeline is still live and the bad release has not yet been yanked. Waiting
+# seven days does not make a release safe; it puts the rest of the ecosystem
+# between us and it, so a malicious publish is usually pulled before a PR is
+# ever opened here.
+#
+# That matters more for actions than for most things: the reviewer of an action
+# bump is looking at a 40-character hash. Human review answers "do we want this
+# version" and cannot answer "is this version malicious" — nobody spots a
+# backdoor by reading a SHA.
+#
+# Cooldown is documented as applying to *version* updates only, not *security*
+# updates, so a Dependabot security update carrying a known CVE is still
+# proposed immediately. `github-actions` supports `default-days` alone; the
+# `semver-*-days` variants do not apply to it.
+#
+# https://docs.github.com/en/code-security/dependabot/working-with-dependabot/dependabot-options-reference#cooldown-
+
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore"
+      include: "scope"
+    labels: ["dependencies", "github-actions"]
+    groups:
+      actions-minor-patch:
+        update-types: ["minor", "patch"]
