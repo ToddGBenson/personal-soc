@@ -38,23 +38,23 @@ if($prev -and (Test-Path "$($prev.FullName)\inventory.csv")){
 }
 
 # mechanical NAS checks
+. "$PSScriptRoot/NetAssess.Verdicts.ps1"
 $nfs = (& $NmapPath -sT -Pn -p111 --script nfs-showmount,rpcinfo $nasGuess 2>&1 | Out-String)
-# WAS: `if($nfs -match '/mnt/')`. Two faults. `/mnt/` is a Synology-shaped
-# export path and this NAS is a Western Digital, so a real export under any
-# other prefix could never match. And the fallback then reported a LISTENING
-# service as "closed (no exports)" purely because port 111 answered -- a
-# reachable NFS daemon described as closed.
+# The ladder that reads this lives in NetAssess.Verdicts.ps1 with fixtures in
+# tests/Test-NfsVerdict.ps1. It is out of here because the only way anybody has
+# ever checked it is by scanning the live LAN -- #8 was validated that way, and
+# #9 could not be, for a good reason.
 #
-# Now an export is any path nfs-showmount actually lists, and the two facts
-# are reported separately because they have different remedies: "the service
-# is reachable" is hardening, "shares are exported" is exposure.
-$nfsExports = [regex]::Matches($nfs, '(?m)^\|[_ ]*\s*(/\S+)') | ForEach-Object { $_.Groups[1].Value }
-$nfsPortOpen = $nfs -match '111/(tcp|udp)\s+open'
-$nfsOpen =
-  if($nfsExports.Count){ 'EXPORTS PRESENT (' + ($nfsExports -join ', ') + ')' }
-  elseif($nfs -match 'No NFS mounts available'){ 'service reachable, no exports' }
-  elseif($nfsPortOpen){ 'unknown (service reachable, exports not enumerable)' }
-  else{ 'unknown (scan failed)' }
+# #9: two states that ARE definite answers were reported as unknown, so the
+# gate stayed shut on questions that had been answered. Port 111 CLOSED was
+# lumped in with "no output at all" as 'unknown (scan failed)', so a correctly
+# hardened NAS could never pass. And rpcinfo already enumerates the registered
+# programs -- if neither mountd nor nfs is among them, nothing serves exports.
+#
+# What stays unknown stays unknown: filtered, and "NFS registered but showmount
+# returned no list", which is the case #9 says is worth knowing about quickly.
+$nfsOpen = Get-NfsExportVerdict -NmapText $nfs
+
 $smb = (& $NmapPath -sT -Pn '-p139,445' --script smb-protocols $nasGuess 2>$null | Out-String)
 $smbv1 = if($smb -match 'NT LM 0\.12'){'SMBv1 ENABLED'} elseif($smb -match '2\.0\.2|3\.1\.1'){'SMB2/3 only'} else{'unknown'}
 $anon = (net view "\\$nasGuess" 2>&1 | Select-String 'Disk').Count
