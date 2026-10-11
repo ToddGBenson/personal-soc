@@ -1,0 +1,39 @@
+# Who reviews what (CIS Software Supply Chain Benchmark v1.0 §1.1.6/§1.1.7).
+#
+# MyKronos read `codeowners_coverage` as `unknown` for this repository, which it
+# renders as "without one, a code-owner review requirement routes to nobody"
+# (MyKronos B-060, TheHub story #60579). Same shape and wording as mykronos's
+# .github/CODEOWNERS, so the estate reads one way.
+#
+# **This is a single-operator estate, and this file says so plainly rather
+# than inventing teams.** Every line resolves to the same person, which makes
+# the coverage number 100% and makes it mean exactly one thing: nothing here
+# is owned by nobody. It does not mean review is distributed, and a file that
+# implied otherwise would be worse than no file.
+#
+# `codeowner_review_required` is deliberately still off. Turning it on with
+# these lines would deadlock every pull request — GitHub refuses to count a
+# self-approval, which is the same trap MyKronos D-110 hit and recorded. This
+# file is the routing; enabling the requirement is a decision for the day
+# there is a second reviewer.
+#
+# Last match wins, so the catch-all goes first and the specific paths follow.
+
+*                       @ToddGBenson
+
+# --- The paths where a review actually changes the outcome -----------------
+#
+# Listed separately not because the owner differs but because a reviewer
+# arriving at one of these should know it is one of these.
+
+# The skills themselves: PowerShell that scans the home network, queries breach
+# data and writes reports about a real person. A defect here acts on real
+# hosts and real data.
+/skills/                @ToddGBenson
+
+# The guard workflow, the one CI this repository runs on GitHub.
+/.github/workflows/     @ToddGBenson
+/.github/CODEOWNERS     @ToddGBenson
+
+# How to report a vulnerability in the above.
+/SECURITY.md            @ToddGBenson
