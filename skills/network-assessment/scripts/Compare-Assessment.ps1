@@ -39,16 +39,29 @@ Write-Host "`n=== ASSESSMENT CHANGE DETECTION ===" -ForegroundColor Cyan
 Write-Host ("baseline: {0}" -f (Split-Path $Baseline -Leaf))
 Write-Host ("current : {0}" -f (Split-Path $Current  -Leaf))
 
-# --- RESOLVED: open in baseline, now resolved/absent ---
+# --- RESOLVED: open in baseline, now explicitly resolved ---
+# WAS: open in baseline and resolved OR ABSENT now. Absent is not resolved -
+# it means this run did not look. On 2026-10-11 a run that could not test
+# anonymous SMB or backups reported both as fixed, and the score rose for
+# what was left out. Absent and 'untested' now go to their own bucket below.
 Write-Host "`n-- Resolved --" -ForegroundColor Green
 $resolved = @()
+$notReassessed = @()
 foreach($f in $base){
   if($f.status -eq 'open'){
     $c = $curById[$f.id]
-    if(-not $c -or $c.status -eq 'resolved'){ $resolved += $f; "  [{0,-8}] {1}" -f $f.severity.ToUpper(), $f.title }
+    if($c -and $c.status -eq 'resolved'){ $resolved += $f; "  [{0,-8}] {1}" -f $f.severity.ToUpper(), $f.title }
+    elseif(-not $c -or $c.status -eq 'untested'){ $notReassessed += $f }
   }
 }
 if(-not $resolved){ "  (none)" }
+
+# --- NOT RE-ASSESSED: open in baseline, absent or 'untested' now ---
+# Carried into the current score at the baseline severity: an unchecked
+# finding is still the last thing known about it.
+Write-Host "`n-- Not re-assessed (carried, still counted) --" -ForegroundColor DarkGray
+foreach($f in $notReassessed){ "  [{0,-8}] {1}" -f $f.severity.ToUpper(), $f.title }
+if(-not $notReassessed){ "  (none)" }
 
 # --- NEW: open in current, not open in baseline ---
 Write-Host "`n-- New --" -ForegroundColor Yellow
@@ -84,7 +97,8 @@ if((Test-Path $bInv) -and (Test-Path $cInv)){
 }
 
 # --- SCORE ---
-$bs = Get-Score $base; $cs = Get-Score $cur; $d = $cs - $bs
+$carried = @($notReassessed | ForEach-Object { [PSCustomObject]@{ severity = $_.severity; status = 'open' } })
+$bs = Get-Score $base; $cs = Get-Score (@($cur) + $carried); $d = $cs - $bs
 Write-Host "`n=== POSTURE SCORE ===" -ForegroundColor Cyan
 "  baseline : {0,3}/100  ({1})" -f $bs, (Band $bs)
 "  current  : {0,3}/100  ({1})" -f $cs, (Band $cs)
@@ -96,6 +110,7 @@ Write-Host ""
 # emit machine-readable summary
 $summary = [PSCustomObject]@{
   resolved = $resolved.Count; new = $new.Count; severity_changed = $chg.Count
+  not_reassessed = $notReassessed.Count
   score_baseline = $bs; score_current = $cs; score_delta = $d
   band_current = (Band $cs)
 }
