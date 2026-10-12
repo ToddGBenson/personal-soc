@@ -67,25 +67,20 @@ $anon = (net view "\\$nasGuess" 2>&1 | Select-String 'Disk').Count
 # AP it had not been told about. A control that can only find the problem it
 # already knows is not a control.
 #
-# Now: pair each `SSID n :` with the `Authentication :` that follows it and
-# report ANY network whose authentication is literally Open, by name.
-$wifiRaw = netsh wlan show networks mode=bssid 2>&1
-$wifiTxt = $wifiRaw | Out-String
-if($wifiTxt -match 'not running|is not enabled|no wireless interface|There is no wireless'){
-  # A missing adapter or a stopped WLAN service must NOT read as an all-clear.
-  # 'unknown' is deliberate: the pipeline treats it as "did not run", not a pass.
-  $openAP = 'unknown (no usable wireless interface)'
-} else {
-  $ssid = $null; $openList = @()
-  foreach($line in $wifiRaw){
-    if($line -match '^\s*SSID\s+\d+\s*:\s*(.*)$'){ $ssid = $Matches[1].Trim() }
-    elseif($line -match '^\s*Authentication\s*:\s*(.*)$'){
-      if($Matches[1].Trim() -eq 'Open'){ $openList += $(if($ssid){$ssid}else{'<hidden SSID>'}) }
-      $ssid = $null
-    }
-  }
-  $openAP = if($openList.Count){ ($openList -join ', ') + ' OPEN — broadcasting' } else { 'no open AP' }
-}
+# Then: ANY network whose authentication was Open failed the gate - including
+# a neighbour's ISP hotspot through the wall, which nobody here can fix.
+#
+# Now: Get-OpenApVerdict (NetAssess.Verdicts.ps1, fixtures in
+# tests/Test-OpenApVerdict.ps1) flags an open network when the gateway serves
+# it OR it is strong enough to be inside the house, and names weak unrelated
+# ones as neighbours without failing on them.
+$gwIp  = $cfg.IPv4DefaultGateway.NextHop
+$gwMac = (Get-NetNeighbor -IPAddress $gwIp -InterfaceIndex $cfg.InterfaceIndex -ErrorAction SilentlyContinue |
+          Where-Object { $_.LinkLayerAddress -and $_.LinkLayerAddress -ne '00-00-00-00-00-00' } |
+          Select-Object -First 1).LinkLayerAddress
+$wifiTxt = netsh wlan show networks mode=bssid 2>&1 | Out-String
+$wifiTxt | Set-Content "$out\raw\wifi-airscan.txt"
+$openAP = Get-OpenApVerdict -NetshText $wifiTxt -GatewayMac $gwMac
 
 # external (WAN) exposure — what the internet sees (needs the home public IP, so it runs locally)
 & (Join-Path $PSScriptRoot 'Get-ExternalExposure.ps1') -OutDir $out *> "$out\raw\external-run.txt"

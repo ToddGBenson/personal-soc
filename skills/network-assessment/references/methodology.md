@@ -29,8 +29,12 @@ Goal: a complete host list. ICMP alone misses devices — combine sweep + ARP + 
 nmap -sn -PE -PS22,80,443,445 -PA3389 <CIDR>      # host discovery (multiple probes)
 ```
 ```powershell
-Get-NetNeighbor -AddressFamily IPv4 | ? {$_.State -in 'Reachable','Stale'}   # full ARP table
+# Force ARP for every address: an OS ping needs no elevation, and Windows ARPs first,
+# so a host that drops ICMP still lands in the neighbour table.
+1..254 | % { (New-Object Net.NetworkInformation.Ping).SendPingAsync("192.168.0.$_", 1000) }
+Get-NetNeighbor -AddressFamily IPv4 -InterfaceIndex <LAN if> | ? {$_.State -in 'Reachable','Delay','Probe'}
 ```
+**Non-elevated nmap undercounts badly on Windows.** Without admin it cannot send ARP or ICMP, so `-sn` falls back to TCP probes: on 2026-10-11 it found 3 of 14 live hosts. The ARP-forcing ping is what makes the inventory complete, and reading only `Reachable`/`Delay`/`Probe` keeps hosts that left (`Stale`) and the broadcast entry (`Permanent`) out of the count. Phones and IoT in power-save may still not answer ARP; compare the count against the gateway's associated-client list.
 Passive service discovery (catches hosts that ignore ping) — SSDP `M-SEARCH` to `239.255.255.250:1900` and an mDNS PTR query for `_services._dns-sd._udp.local` to `224.0.0.251:5353`, **bound to the LAN interface IP** (not the WSL/virtual adapter — that was the gotcha; multicast went out the wrong NIC until bound explicitly).
 
 Cross-reference every MAC against the OUI table in `device-fingerprints.md`. Flag locally-administered (randomized) MACs — bit 0x02 of the first octet.
@@ -99,7 +103,7 @@ netsh wlan show networks mode=bssid                  # over-the-air auth/cipher 
 
 Key checks:
 - **Encryption:** WPA3 vs WPA2 vs Open. A saved profile showing WPA3 while the over-the-air scan shows WPA2 for the same SSID = **WPA3 transition mode** (downgrade-attackable).
-- **Open SSIDs broadcasting in-home** — correlate strong-signal Open networks to a device (e.g. a Tuya/SmartLife gadget in setup mode).
+- **Open SSIDs broadcasting in-home** — correlate strong-signal Open networks to a device (e.g. a Tuya/SmartLife gadget in setup mode). An open network counts as in-home when the gateway serves it (BSSID ≈ gateway MAC) **or** its signal is ≥ 60%; a weak one unrelated to the gateway is a neighbour's (e.g. an ISP hotspot next door) and is reported, not failed on. The weekly scan applies exactly this rule (`Get-OpenApVerdict`).
 - **BSSID→gateway correlation:** if the SSID BSSIDs match the router's LAN MAC ±a few (e.g. `aa:bb:cc:dd:ee:f0` → `...f3/f4/f5`), the Wi-Fi is served by the gateway itself — relevant when the gateway is EOL.
 
 **Stop:** never attempt to connect to or capture handshakes from networks you don't own.

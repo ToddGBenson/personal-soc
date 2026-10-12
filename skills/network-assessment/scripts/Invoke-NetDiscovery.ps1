@@ -23,9 +23,55 @@ Write-Host "== Phase 1: discovery on $Cidr from $LocalIp ==" -ForegroundColor Cy
 Log "nmap -sn -PE -PS22,80,443,445 -PA3389 $Cidr   [host discovery]"
 & $NmapPath -sn -PE '-PS22,80,443,445' -PA3389 $Cidr | Tee-Object "$OutDir\raw\discovery.txt" | Out-Null
 
-# --- full ARP / neighbor table (catches non-ping hosts) ---
+# --- force ARP resolution for every address in scope ---
+# Non-elevated nmap on Windows cannot send ARP or ICMP, so `-sn` falls back to
+# TCP probes and the ARP table it leaves behind holds only the hosts that
+# answered one - 3 of 14 on 2026-10-11, which is why weekly host counts fell
+# from 54 to 15 with nothing on the network changing. An OS-level ping needs no
+# elevation and makes Windows ARP for the address first; a device that drops
+# ICMP still answers ARP and lands in the neighbour table. SendPingAsync rather
+# than ForEach-Object -Parallel: the Scheduled Task runs Windows PowerShell 5.1.
+function ConvertTo-IpNumber([string]$a) {
+  $o = $a.Split('.') | ForEach-Object { [uint64]$_ }
+  return $o[0] * 16777216 + $o[1] * 65536 + $o[2] * 256 + $o[3]
+}
+$net, $bits = $Cidr.Split('/')
+$bits = [int]$bits
+$size = [uint64][Math]::Pow(2, 32 - $bits)
+$base = (ConvertTo-IpNumber $net) - ((ConvertTo-IpNumber $net) % $size)
+if ($bits -lt 22) {
+  Log "ARP sweep skipped: /$bits is wider than /22   [discovery relies on nmap + existing ARP only]"
+} else {
+  $targets = for ($i = 1; $i -lt $size - 1; $i++) {
+    $v = $base + $i
+    '{0}.{1}.{2}.{3}' -f ([Math]::Floor($v / 16777216) % 256), ([Math]::Floor($v / 65536) % 256), ([Math]::Floor($v / 256) % 256), ($v % 256)
+  }
+  Log "ICMP echo x2 (OS ping, forces ARP) $Cidr, 64 at a time   [ARP-forcing discovery]"
+  foreach ($round in 1..2) {
+    for ($i = 0; $i -lt $targets.Count; $i += 64) {
+      $batch = $targets[$i..([Math]::Min($i + 63, $targets.Count - 1))]
+      $pingers = @(); $tasks = @()
+      foreach ($t in $batch) {
+        $p = New-Object System.Net.NetworkInformation.Ping
+        $pingers += $p; $tasks += $p.SendPingAsync($t, 1000)
+      }
+      try { [System.Threading.Tasks.Task]::WaitAll([System.Threading.Tasks.Task[]]$tasks) } catch {}
+      $pingers | ForEach-Object { $_.Dispose() }
+    }
+  }
+}
+
+# --- ARP / neighbor table, LAN interface only ---
+# Entries confirmed by this run only: Reachable/Delay/Probe. Stale and
+# Permanent are left out - Stale is a host that did not answer the sweep just
+# now, and Permanent is the subnet broadcast (FF-FF-FF-FF-FF-FF), which was
+# being counted as a host.
+$ifIndex = (Get-NetIPAddress -IPAddress $LocalIp -ErrorAction SilentlyContinue).InterfaceIndex
 $nbr = Get-NetNeighbor -AddressFamily IPv4 -ErrorAction SilentlyContinue |
-  Where-Object { $_.State -in 'Reachable','Stale','Permanent','Delay','Probe' -and $_.IPAddress -like ($Cidr.Split('/')[0].Substring(0,$Cidr.Split('/')[0].LastIndexOf('.')) + '.*') }
+  Where-Object { $_.State -in 'Reachable','Delay','Probe' -and
+                 (ConvertTo-IpNumber $_.IPAddress) -ge $base -and (ConvertTo-IpNumber $_.IPAddress) -lt ($base + $size) -and
+                 (-not $ifIndex -or $_.InterfaceIndex -eq $ifIndex) -and
+                 $_.LinkLayerAddress -notmatch '^(FF-FF-FF-FF-FF-FF|00-00-00-00-00-00|01-00-5E)' }
 
 # --- passive SSDP (bound to LAN interface, not a virtual NIC) ---
 $ssdpHosts = @{}
