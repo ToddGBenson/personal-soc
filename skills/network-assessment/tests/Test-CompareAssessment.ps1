@@ -39,35 +39,35 @@ try {
 
     Write-Host ""
     Write-Host "the pipeline's fixtures (must not change)"
-    $s = Run 'pipeline' @($f1, $f2) @(
+    $s = Run -Name 'pipeline' -Base @($f1, $f2) -Cur @(
         @{ id = 'F-1'; title = 'Telnet open';  severity = 'high';     status = 'resolved' },
         $f2,
         @{ id = 'F-3'; title = 'SMBv1 on NAS'; severity = 'critical'; status = 'open' })
-    Check 'baseline score'  $s.score_baseline 93
-    Check 'current score'   $s.score_current  84
-    Check 'score delta'     $s.score_delta    -9
-    Check 'resolved count'  $s.resolved       1
-    Check 'new count'       $s.new            1
-    Check 'not re-assessed' $s.not_reassessed 0
+    Check -What 'baseline score'  -Got $s.score_baseline -Want 93
+    Check -What 'current score'   -Got $s.score_current  -Want 84
+    Check -What 'score delta'     -Got $s.score_delta    -Want -9
+    Check -What 'resolved count'  -Got $s.resolved       -Want 1
+    Check -What 'new count'       -Got $s.new            -Want 1
+    Check -What 'not re-assessed' -Got $s.not_reassessed -Want 0
 
     Write-Host ""
     Write-Host "absent is not resolved"
     # F-1 missing from the current run entirely. Old behaviour: resolved, and
     # the score rose to 99 for leaving it out.
-    $s = Run 'absent' @($f1, $f2) @($f2)
-    Check 'absent finding is not resolved'      $s.resolved       0
-    Check '...it is not re-assessed'            $s.not_reassessed 1
-    Check '...and still counts (score)'         $s.score_current  93
-    Check '...so the delta is 0, not +6'        $s.score_delta    0
+    $s = Run -Name 'absent' -Base @($f1, $f2) -Cur @($f2)
+    Check -What 'absent finding is not resolved'      -Got $s.resolved       -Want 0
+    Check -What '...it is not re-assessed'            -Got $s.not_reassessed -Want 1
+    Check -What '...and still counts (score)'         -Got $s.score_current  -Want 93
+    Check -What '...so the delta is 0, not +6'        -Got $s.score_delta    -Want 0
 
     Write-Host ""
     Write-Host "'untested' is not resolved either"
-    $s = Run 'untested' @($f1, $f2) @(
+    $s = Run -Name 'untested' -Base @($f1, $f2) -Cur @(
         @{ id = 'F-1'; title = 'Telnet open'; severity = 'high'; status = 'untested' }, $f2)
-    Check 'untested finding is not resolved'    $s.resolved       0
-    Check '...it is not re-assessed'            $s.not_reassessed 1
-    Check '...and counted once, not twice'      $s.score_current  93
-    Check '...and is not reported as new'       $s.new            0
+    Check -What 'untested finding is not resolved'    -Got $s.resolved       -Want 0
+    Check -What '...it is not re-assessed'            -Got $s.not_reassessed -Want 1
+    Check -What '...and counted once, not twice'      -Got $s.score_current  -Want 93
+    Check -What '...and is not reported as new'       -Got $s.new            -Want 0
 }
 finally {
     Remove-Item $root -Recurse -Force -ErrorAction SilentlyContinue

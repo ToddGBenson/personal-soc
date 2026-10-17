@@ -19,7 +19,11 @@ param(
 $ErrorActionPreference = 'Stop'
 Push-Location $Repo
 try {
-  if (-not (git rev-parse --is-inside-work-tree 2>$null)) { throw "Not a git repository: $Repo" }
+  # stderr is discarded on purpose: outside a work tree git prints "fatal: not a
+  # git repository" and stdout is empty, which is the answer. Captured first so
+  # the redirection is not inside the condition.
+  $insideWorkTree = git rev-parse --is-inside-work-tree 2>$null
+  if (-not $insideWorkTree) { throw "Not a git repository: $Repo" }
   if (-not (Test-Path $Doc)) { throw "Doc not found: $Doc" }
 
   # commit that last modified the doc
