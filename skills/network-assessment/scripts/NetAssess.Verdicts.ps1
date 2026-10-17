@@ -109,6 +109,59 @@ function Get-NfsExportVerdict {
     return 'unknown (nmap completed but reported no state for port 111)'
 }
 
+function Get-NfsExportVerdictWithRetry {
+    <#
+    .SYNOPSIS
+        Run the NFS probe up to -Attempts times and keep the first definite
+        answer, with every raw output kept as evidence.
+
+    .DESCRIPTION
+        #9: the scheduled scans of 2026-09-07 and 2026-09-14 reported
+        'unknown (service reachable, exports not enumerable)', which shut the
+        weekly gate for two weeks. The runs either side of them (09-05, and
+        every run from 09-21 on) got a definite 'No NFS mounts available' from
+        the same NAS with the same command, and three probes on 2026-10-17
+        answered identically. The non-answer was not the NAS's state; it was
+        one probe that did not get a reply. A single attempt let it stand for
+        a week, and because the nmap text was never written to disk nobody
+        could see why.
+
+        So: ask again, and stop at the first verdict that does not begin
+        'unknown'. This cannot turn a non-answer into a pass -- only a probe
+        that actually returned a definite answer ends the loop, and if every
+        attempt is unknown the result is still unknown. Every attempt's raw
+        text is returned so the caller can keep it.
+
+    .PARAMETER Probe
+        Scriptblock returning the nmap text for one attempt.
+    .PARAMETER Attempts
+        Maximum number of probes.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][scriptblock]$Probe,
+        [ValidateRange(1, 10)][int]$Attempts = 3
+    )
+
+    $texts = @()
+    $verdict = 'unknown (no probe ran)'
+    for ($i = 1; $i -le $Attempts; $i++) {
+        $text = (& $Probe | Out-String)
+        $texts += $text
+        $verdict = Get-NfsExportVerdict -NmapText $text
+        if ($verdict -notlike 'unknown*') { break }
+    }
+    $n = $texts.Count
+    if ($n -gt 1) {
+        if ($verdict -like 'unknown*') {
+            $verdict += " (all $n attempts)"
+        } else {
+            $verdict += " (answered on attempt $n of $Attempts)"
+        }
+    }
+    [pscustomobject]@{ Verdict = $verdict; Attempts = $n; Texts = $texts }
+}
+
 function Test-GatewayServedBssid {
     <#
     .SYNOPSIS

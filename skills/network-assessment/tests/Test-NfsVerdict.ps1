@@ -130,6 +130,96 @@ Check "empty output"                         'unknown (nmap did not complete)'  
 Check "nmap missing / killed mid-scan"       'unknown (nmap did not complete)'       "PORT    STATE SERVICE`n111/tcp closed rpcbind"
 Check "completed, no line for 111"           'unknown (nmap completed but reported*' "Nmap done: 1 IP address (1 host up) scanned in 0.2 seconds"
 
+# ---- REAL captures, nmap 7.98, 2026-10-17, the NAS itself ----------------
+#
+# nmap -sT -Pn -p111 --script nfs-showmount,rpcinfo 192.168.0.5, run three
+# times in a row against the operator's own WD NAS (read-only; the same
+# command the weekly scan runs). All three answered. nmap does not order NSE
+# output, so the second came back with nfs-showmount AFTER rpcinfo; both
+# orders are kept because the classifier must not depend on it.
+
+$realNasShowmountFirst = @'
+Starting Nmap 7.98 ( https://nmap.org ) at 2026-10-17 07:26 -0700
+Nmap scan report for 192.168.0.5
+Host is up (0.00s latency).
+
+PORT    STATE SERVICE
+111/tcp open  rpcbind
+|_nfs-showmount: No NFS mounts available
+| rpcinfo: 
+|   program version    port/proto  service
+|   100000  2,3,4        111/tcp   rpcbind
+|   100000  2,3,4        111/udp   rpcbind
+|   100003  3           2049/tcp   nfs
+|   100003  3           2049/udp   nfs
+|   100005  1,2,3      41669/tcp   mountd
+|   100005  1,2,3      43639/udp   mountd
+|   100021  1,3,4      35501/udp   nlockmgr
+|   100021  1,3,4      46415/tcp   nlockmgr
+|   100024  1          41661/tcp   status
+|   100024  1          59033/udp   status
+|   100227  3           2049/tcp   nfs_acl
+|_  100227  3           2049/udp   nfs_acl
+
+Nmap done: 1 IP address (1 host up) scanned in 1.52 seconds
+'@
+
+$realNasShowmountLast = @'
+Starting Nmap 7.98 ( https://nmap.org ) at 2026-10-17 07:26 -0700
+Nmap scan report for 192.168.0.5
+Host is up (0.00s latency).
+
+PORT    STATE SERVICE
+111/tcp open  rpcbind
+| rpcinfo: 
+|   program version    port/proto  service
+|   100000  2,3,4        111/tcp   rpcbind
+|   100000  2,3,4        111/udp   rpcbind
+|   100003  3           2049/tcp   nfs
+|   100003  3           2049/udp   nfs
+|   100005  1,2,3      41669/tcp   mountd
+|   100005  1,2,3      43639/udp   mountd
+|   100021  1,3,4      35501/udp   nlockmgr
+|   100021  1,3,4      46415/tcp   nlockmgr
+|   100024  1          41661/tcp   status
+|   100024  1          59033/udp   status
+|   100227  3           2049/tcp   nfs_acl
+|_  100227  3           2049/udp   nfs_acl
+|_nfs-showmount: No NFS mounts available
+
+Nmap done: 1 IP address (1 host up) scanned in 0.66 seconds
+'@
+
+Write-Host ""
+Write-Host "the NAS as it answers today (real, 2026-10-17)"
+Check "NFS running, export list empty"       'service reachable, no exports'         $realNasShowmountFirst
+Check "same, NSE output in the other order"  'service reachable, no exports'         $realNasShowmountLast
+
+# ---- Get-NfsExportVerdictWithRetry ----------------------------------------
+#
+# #9: 09-07 and 09-14 were unknown while every run either side got the answer
+# above. Retry must (a) recover a definite answer after a non-answer, (b)
+# never turn all-unknown into a pass, (c) not probe again once answered.
+
+function CheckRetry([string]$Name, [string]$Expected, [int]$ExpectedAttempts, [string[]]$Replies) {
+    $script:replyQueue = [System.Collections.Queue]::new([object[]]$Replies)
+    $r = Get-NfsExportVerdictWithRetry -Attempts 3 -Probe { $script:replyQueue.Dequeue() }
+    if ($r.Verdict -like $Expected -and $r.Attempts -eq $ExpectedAttempts -and $r.Texts.Count -eq $ExpectedAttempts) {
+        Write-Host ("  [ok]   {0,-44} {1}" -f $Name, $r.Verdict)
+        $script:pass++
+    } else {
+        Write-Host ("  [FAIL] {0,-44} expected '{1}' in {2}, got '{3}' in {4}" -f $Name, $Expected, $ExpectedAttempts, $r.Verdict, $r.Attempts)
+        $script:fail++
+    }
+}
+
+Write-Host ""
+Write-Host "retry: a non-answer is asked again, never promoted"
+CheckRetry "answered first time, probed once"     'service reachable, no exports'                1 @($realNasShowmountFirst)
+CheckRetry "unknown, then answered"               'service reachable, no exports (answered on attempt 2 of 3)' 2 @($nfsRegisteredNoList, $realNasShowmountLast)
+CheckRetry "unknown x3 stays unknown"             'unknown (NFS registered*(all 3 attempts)'     3 @($nfsRegisteredNoList, $nfsRegisteredNoList, $nfsRegisteredNoList)
+CheckRetry "killed, then exports found"           'EXPORTS PRESENT (/volume1/backup) (answered on attempt 2 of 3)' 2 @('', $exportsPresent)
+
 Write-Host ""
 if ($fail -eq 0) {
     Write-Host "  $pass passed, 0 failed"
