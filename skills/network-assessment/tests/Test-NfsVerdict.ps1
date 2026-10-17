@@ -69,9 +69,9 @@ Write-Host ""
 Write-Host "the two states the old code called 'unknown (scan failed)'"
 # THE REGRESSION. A NAS with rpcbind closed is hardened, and the old code
 # reported it as a failed scan, so the gate could never open.
-Check "port 111 closed is an ANSWER"        'no NFS service (port 111 closed)'   $realClosed
+Check -Name "port 111 closed is an ANSWER"        -Expected 'no NFS service (port 111 closed)'   -Text $realClosed
 # And this one must stay unknown: filtered means nothing was learned.
-Check "port 111 filtered stays unknown"     'unknown (port 111 filtered*'        $realFiltered
+Check -Name "port 111 filtered stays unknown"     -Expected 'unknown (port 111 filtered*'        -Text $realFiltered
 
 # ---- CONSTRUCTED from nmap's NSE output format ----------------------------
 
@@ -118,17 +118,17 @@ Nmap done: 1 IP address (1 host up) scanned in 1.10 seconds
 
 Write-Host ""
 Write-Host "constructed from nmap's documented NSE output"
-Check "an export under ANY prefix is found"  'EXPORTS PRESENT (/volume1/backup)'     $exportsPresent
-Check "no mounts available"                  'service reachable, no exports'         $noMounts
-Check "rpcbind up, nothing NFS registered"   'rpcbind reachable, no NFS service*'    $rpcbindNoNfs
-Check "NFS registered but no list -> unknown" 'unknown (NFS registered*'             $nfsRegisteredNoList
-Check "open, rpcinfo silent -> unknown"      'unknown (service reachable, rpcinfo*'  $openNoScriptOutput
+Check -Name "an export under ANY prefix is found"  -Expected 'EXPORTS PRESENT (/volume1/backup)'     -Text $exportsPresent
+Check -Name "no mounts available"                  -Expected 'service reachable, no exports'         -Text $noMounts
+Check -Name "rpcbind up, nothing NFS registered"   -Expected 'rpcbind reachable, no NFS service*'    -Text $rpcbindNoNfs
+Check -Name "NFS registered but no list -> unknown" -Expected 'unknown (NFS registered*'             -Text $nfsRegisteredNoList
+Check -Name "open, rpcinfo silent -> unknown"      -Expected 'unknown (service reachable, rpcinfo*'  -Text $openNoScriptOutput
 
 Write-Host ""
 Write-Host "nothing may read as a pass by accident"
-Check "empty output"                         'unknown (nmap did not complete)'       ''
-Check "nmap missing / killed mid-scan"       'unknown (nmap did not complete)'       "PORT    STATE SERVICE`n111/tcp closed rpcbind"
-Check "completed, no line for 111"           'unknown (nmap completed but reported*' "Nmap done: 1 IP address (1 host up) scanned in 0.2 seconds"
+Check -Name "empty output"                         -Expected 'unknown (nmap did not complete)'       -Text ''
+Check -Name "nmap missing / killed mid-scan"       -Expected 'unknown (nmap did not complete)'       -Text "PORT    STATE SERVICE`n111/tcp closed rpcbind"
+Check -Name "completed, no line for 111"           -Expected 'unknown (nmap completed but reported*' -Text "Nmap done: 1 IP address (1 host up) scanned in 0.2 seconds"
 
 Write-Host ""
 if ($fail -eq 0) {

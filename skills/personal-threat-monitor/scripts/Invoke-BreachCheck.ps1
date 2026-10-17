@@ -34,7 +34,8 @@ function Query($kind, $email){
       if($code -eq 404){ return @() }                                   # not found = clean
       if($code -eq 401){ throw "HIBP 401 — invalid API key." }
       if($code -eq 429){                                                # rate limited — back off
-        $wait = 2000; try { $wait = [int]($_.Exception.Response.Headers['retry-after']) * 1000 } catch {}
+        # A missing or unparseable Retry-After keeps the 2s default; the request is retried either way.
+        $wait = 2000; try { $wait = [int]($_.Exception.Response.Headers['retry-after']) * 1000 } catch { Write-Verbose "no usable Retry-After header; backing off ${wait}ms" }
         Start-Sleep -Milliseconds ([Math]::Max($wait,2000)); continue
       }
       throw

@@ -87,7 +87,13 @@ $openAP = Get-OpenApVerdict -NetshText $wifiTxt -GatewayMac $gwMac
 $extPorts = 'n/a'
 if(Test-Path "$out\external-exposure.json"){
   try { $ext = Get-Content "$out\external-exposure.json" -Raw | ConvertFrom-Json
-        $extPorts = if($ext.ports){ ($ext.ports -join ', ') } else { 'none visible' } } catch {}
+        $extPorts = if($ext.ports){ ($ext.ports -join ', ') } else { 'none visible' } }
+  catch {
+    # The report keeps 'n/a' (no answer, same as a missing file), but a file
+    # that exists and will not parse is a broken check, not an absent one, so
+    # say so rather than let it pass silently.
+    Write-Warning "external-exposure.json is unreadable, WAN ports reported as n/a: $($_.Exception.Message)"
+  }
 }
 
 @"

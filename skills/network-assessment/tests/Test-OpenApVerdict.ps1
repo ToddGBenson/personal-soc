@@ -47,50 +47,50 @@ $header = "`r`nInterface name : Wi-Fi 2 `r`nThere are N networks currently visib
 # The household gateway, as Get-NetNeighbor prints it.
 $gw = '02-1A-2B-3C-4D-10'
 
-$ours      = Net 'HomeNet'        'WPA2-Personal' @('02:1a:2b:3c:4d:13@100', '02:1a:2b:3c:4d:14@100')
-$oursGuest = Net 'HomeNet-Guest'  'Open'          @('8a:1a:2b:3c:4d:15@41')
-$neighbour = Net 'ISPHotspot'     'Open'          @('06:77:88:99:aa:bc@30')
-$nbrSecure = Net 'NeighbourHome'  'WPA2-Personal' @('06:77:88:99:aa:ba@27')
-$gadget    = Net 'SmartPlug-9F01' 'Open'          @('0a:55:66:77:88:01@84')
-$hidden    = Net ''               'Open'          @('0e:12:34:56:78:9a@72')
-$nearNbr   = Net 'CafeFree'       'Open'          @('06:77:88:99:aa:01@63')
+$ours      = Net -Ssid 'HomeNet'        -Auth 'WPA2-Personal' -Bssids @('02:1a:2b:3c:4d:13@100', '02:1a:2b:3c:4d:14@100')
+$oursGuest = Net -Ssid 'HomeNet-Guest'  -Auth 'Open'          -Bssids @('8a:1a:2b:3c:4d:15@41')
+$neighbour = Net -Ssid 'ISPHotspot'     -Auth 'Open'          -Bssids @('06:77:88:99:aa:bc@30')
+$nbrSecure = Net -Ssid 'NeighbourHome'  -Auth 'WPA2-Personal' -Bssids @('06:77:88:99:aa:ba@27')
+$gadget    = Net -Ssid 'SmartPlug-9F01' -Auth 'Open'          -Bssids @('0a:55:66:77:88:01@84')
+$hidden    = Net -Ssid ''               -Auth 'Open'          -Bssids @('0e:12:34:56:78:9a@72')
+$nearNbr   = Net -Ssid 'CafeFree'       -Auth 'Open'          -Bssids @('06:77:88:99:aa:01@63')
 
 Write-Host ""
 Write-Host "open networks that are not ours"
 
 $v = Get-OpenApVerdict -NetshText ($header + $ours + $neighbour + $nbrSecure) -GatewayMac $gw
-Check "weak unrelated open AP does not fail the gate" { $v -notmatch 'broadcasting' } $v
-Check "...and is still named, as a neighbour"         { $v -match 'neighbouring, not ours: ISPHotspot 30%' } $v
+Check -Name "weak unrelated open AP does not fail the gate" -Test { $v -notmatch 'broadcasting' } -Shown $v
+Check -Name "...and is still named, as a neighbour"         -Test { $v -match 'neighbouring, not ours: ISPHotspot 30%' } -Shown $v
 
 $v = Get-OpenApVerdict -NetshText ($header + $ours + $nearNbr) -GatewayMac $gw
-Check "unrelated open AP above threshold still fails" { $v -match 'CafeFree \(63% signal\) OPEN - broadcasting' } $v
+Check -Name "unrelated open AP above threshold still fails" -Test { $v -match 'CafeFree \(63% signal\) OPEN - broadcasting' } -Shown $v
 
 Write-Host ""
 Write-Host "open networks that are ours"
 
 # August's real Critical: a device in setup mode, its own MAC, strong signal.
 $v = Get-OpenApVerdict -NetshText ($header + $ours + $gadget + $neighbour) -GatewayMac $gw
-Check "in-home gadget (own MAC, 84%) fails the gate"   { $v -match 'SmartPlug-9F01 \(84% signal\)' -and $v -match 'broadcasting' } $v
-Check "...and the neighbour is listed separately"      { $v -match '; neighbouring, not ours: ISPHotspot 30%' } $v
+Check -Name "in-home gadget (own MAC, 84%) fails the gate"   -Test { $v -match 'SmartPlug-9F01 \(84% signal\)' -and $v -match 'broadcasting' } -Shown $v
+Check -Name "...and the neighbour is listed separately"      -Test { $v -match '; neighbouring, not ours: ISPHotspot 30%' } -Shown $v
 
 # Locally-administered first octet, last octet +5: the gateway's own guest SSID.
 $v = Get-OpenApVerdict -NetshText ($header + $ours + $oursGuest) -GatewayMac $gw
-Check "gateway-served open guest SSID fails (41%)"     { $v -match 'HomeNet-Guest \(served by the gateway\) OPEN - broadcasting' } $v
+Check -Name "gateway-served open guest SSID fails (41%)"     -Test { $v -match 'HomeNet-Guest \(served by the gateway\) OPEN - broadcasting' } -Shown $v
 
 $v = Get-OpenApVerdict -NetshText ($header + $hidden) -GatewayMac $gw
-Check "strong hidden open SSID is named, and fails"    { $v -match '<hidden SSID> \(72% signal\)' -and $v -match 'broadcasting' } $v
+Check -Name "strong hidden open SSID is named, and fails"    -Test { $v -match '<hidden SSID> \(72% signal\)' -and $v -match 'broadcasting' } -Shown $v
 
 Write-Host ""
 Write-Host "states that must not read as an all-clear"
 
 $v = Get-OpenApVerdict -NetshText ($header + $neighbour) -GatewayMac ''
-Check "gateway MAC unknown: every open AP fails"       { $v -match 'ISPHotspot \(gateway MAC unknown\) OPEN - broadcasting' } $v
+Check -Name "gateway MAC unknown: every open AP fails"       -Test { $v -match 'ISPHotspot \(gateway MAC unknown\) OPEN - broadcasting' } -Shown $v
 
 $v = Get-OpenApVerdict -NetshText "The Wireless AutoConfig Service (wlansvc) is not running." -GatewayMac $gw
-Check "no wireless service is unknown, not a pass"     { $v -like 'unknown*' } $v
+Check -Name "no wireless service is unknown, not a pass"     -Test { $v -like 'unknown*' } -Shown $v
 
 $v = Get-OpenApVerdict -NetshText ($header + $ours + $nbrSecure) -GatewayMac $gw
-Check "nothing open is a pass"                         { $v -eq 'no open AP' } $v
+Check -Name "nothing open is a pass"                         -Test { $v -eq 'no open AP' } -Shown $v
 
 Write-Host ""
 Write-Host "BSSID-to-gateway matching"
@@ -104,7 +104,7 @@ $cases = @(
 )
 foreach ($c in $cases) {
     $got = Test-GatewayServedBssid -Bssid $c[0] -GatewayMac $gw
-    Check ("{0} ({1})" -f $c[0], $c[2]) { $got -eq $c[1] } "$got"
+    Check -Name ("{0} ({1})" -f $c[0], $c[2]) -Test { $got -eq $c[1] } -Shown "$got"
 }
 
 Write-Host ""

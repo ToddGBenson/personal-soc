@@ -20,7 +20,10 @@ function Log($m){ Add-Content "$OutDir\scan-log.md" ("{0}  {1}" -f (Get-Date -Fo
 Write-Host "== External exposure (WAN view via Shodan InternetDB) ==" -ForegroundColor Cyan
 $pub = $null
 foreach($svc in "https://api.ipify.org","https://ifconfig.me/ip","https://icanhazip.com"){
-  try { $pub = (Invoke-RestMethod $svc -TimeoutSec 10).ToString().Trim(); if($pub){ break } } catch {}
+  # One echo service failing is expected and the next is tried; all of them
+  # failing is reported by the 'Could not determine public IP' line below.
+  try { $pub = (Invoke-RestMethod -Uri $svc -TimeoutSec 10).ToString().Trim(); if($pub){ break } }
+  catch { Write-Verbose "public-IP lookup via $svc failed: $($_.Exception.Message)" }
 }
 if(-not $pub){ Write-Host "Could not determine public IP." -ForegroundColor Red; return }
 Write-Host "Public IP: $pub" -ForegroundColor White
