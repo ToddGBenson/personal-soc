@@ -39,7 +39,6 @@ if($prev -and (Test-Path "$($prev.FullName)\inventory.csv")){
 
 # mechanical NAS checks
 . "$PSScriptRoot/NetAssess.Verdicts.ps1"
-$nfs = (& $NmapPath -sT -Pn -p111 --script nfs-showmount,rpcinfo $nasGuess 2>&1 | Out-String)
 # The ladder that reads this lives in NetAssess.Verdicts.ps1 with fixtures in
 # tests/Test-NfsVerdict.ps1. It is out of here because the only way anybody has
 # ever checked it is by scanning the live LAN -- #8 was validated that way, and
@@ -53,7 +52,19 @@ $nfs = (& $NmapPath -sT -Pn -p111 --script nfs-showmount,rpcinfo $nasGuess 2>&1 
 #
 # What stays unknown stays unknown: filtered, and "NFS registered but showmount
 # returned no list", which is the case #9 says is worth knowing about quickly.
-$nfsOpen = Get-NfsExportVerdict -NmapText $nfs
+#
+# #9 again: 09-07 and 09-14 were 'unknown' while the runs either side got a
+# definite answer from the same NAS -- one probe that went unanswered shut the
+# gate for a week, and its output was never kept. Retry (only a definite
+# answer stops it, so a non-answer cannot become a pass) and keep every
+# attempt in raw\nas-nfs.txt.
+$nfsRun = Get-NfsExportVerdictWithRetry -Attempts 3 -Probe {
+  & $NmapPath -sT -Pn -p111 --script nfs-showmount,rpcinfo $nasGuess 2>&1
+}
+$i = 0
+$nfsRun.Texts | ForEach-Object { $i++; "===== attempt $i of $($nfsRun.Attempts)"; $_ } |
+  Set-Content "$out\raw\nas-nfs.txt"
+$nfsOpen = $nfsRun.Verdict
 
 $smb = (& $NmapPath -sT -Pn '-p139,445' --script smb-protocols $nasGuess 2>$null | Out-String)
 $smbv1 = if($smb -match 'NT LM 0\.12'){'SMBv1 ENABLED'} elseif($smb -match '2\.0\.2|3\.1\.1'){'SMB2/3 only'} else{'unknown'}
