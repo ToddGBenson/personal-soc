@@ -146,7 +146,7 @@ Host is up (0.00s latency).
 PORT    STATE SERVICE
 111/tcp open  rpcbind
 |_nfs-showmount: No NFS mounts available
-| rpcinfo: 
+| rpcinfo:
 |   program version    port/proto  service
 |   100000  2,3,4        111/tcp   rpcbind
 |   100000  2,3,4        111/udp   rpcbind
@@ -171,7 +171,7 @@ Host is up (0.00s latency).
 
 PORT    STATE SERVICE
 111/tcp open  rpcbind
-| rpcinfo: 
+| rpcinfo:
 |   program version    port/proto  service
 |   100000  2,3,4        111/tcp   rpcbind
 |   100000  2,3,4        111/udp   rpcbind
@@ -192,8 +192,8 @@ Nmap done: 1 IP address (1 host up) scanned in 0.66 seconds
 
 Write-Host ""
 Write-Host "the NAS as it answers today (real, 2026-10-17)"
-Check "NFS running, export list empty"       'service reachable, no exports'         $realNasShowmountFirst
-Check "same, NSE output in the other order"  'service reachable, no exports'         $realNasShowmountLast
+Check -Name "NFS running, export list empty"       -Expected 'service reachable, no exports'         -Text $realNasShowmountFirst
+Check -Name "same, NSE output in the other order"  -Expected 'service reachable, no exports'         -Text $realNasShowmountLast
 
 # ---- Get-NfsExportVerdictWithRetry ----------------------------------------
 #
@@ -215,10 +215,10 @@ function CheckRetry([string]$Name, [string]$Expected, [int]$ExpectedAttempts, [s
 
 Write-Host ""
 Write-Host "retry: a non-answer is asked again, never promoted"
-CheckRetry "answered first time, probed once"     'service reachable, no exports'                1 @($realNasShowmountFirst)
-CheckRetry "unknown, then answered"               'service reachable, no exports (answered on attempt 2 of 3)' 2 @($nfsRegisteredNoList, $realNasShowmountLast)
-CheckRetry "unknown x3 stays unknown"             'unknown (NFS registered*(all 3 attempts)'     3 @($nfsRegisteredNoList, $nfsRegisteredNoList, $nfsRegisteredNoList)
-CheckRetry "killed, then exports found"           'EXPORTS PRESENT (/volume1/backup) (answered on attempt 2 of 3)' 2 @('', $exportsPresent)
+CheckRetry -Name "answered first time, probed once"     -Expected 'service reachable, no exports'                -ExpectedAttempts 1 -Replies @($realNasShowmountFirst)
+CheckRetry -Name "unknown, then answered"               -Expected 'service reachable, no exports (answered on attempt 2 of 3)' -ExpectedAttempts 2 -Replies @($nfsRegisteredNoList, $realNasShowmountLast)
+CheckRetry -Name "unknown x3 stays unknown"             -Expected 'unknown (NFS registered*(all 3 attempts)'     -ExpectedAttempts 3 -Replies @($nfsRegisteredNoList, $nfsRegisteredNoList, $nfsRegisteredNoList)
+CheckRetry -Name "killed, then exports found"           -Expected 'EXPORTS PRESENT (/volume1/backup) (answered on attempt 2 of 3)' -ExpectedAttempts 2 -Replies @('', $exportsPresent)
 
 Write-Host ""
 if ($fail -eq 0) {
