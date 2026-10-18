@@ -57,6 +57,7 @@ function Get-NfsExportVerdict {
         `nmap -sT -Pn -p111 --script nfs-showmount,rpcinfo <target>`.
     #>
     [CmdletBinding()]
+    [OutputType([string])]
     param([Parameter(Mandatory)][AllowEmptyString()][string]$NmapText)
 
     $text = if ($null -eq $NmapText) { '' } else { $NmapText }
@@ -124,6 +125,7 @@ function Test-GatewayServedBssid {
         differ by up to 16.
     #>
     [CmdletBinding()]
+    [OutputType([bool])]
     param([string]$Bssid, [string]$GatewayMac)
 
     $b = @($Bssid -split '[:-]' | Where-Object { $_ })
@@ -174,6 +176,7 @@ function Get-OpenApVerdict {
         Signal percent at or above which an open AP counts as in-home.
     #>
     [CmdletBinding()]
+    [OutputType([string])]
     param(
         [Parameter(Mandatory)][AllowEmptyString()][string]$NetshText,
         [string]$GatewayMac = '',

@@ -55,7 +55,11 @@ if ($bits -lt 22) {
         $p = New-Object System.Net.NetworkInformation.Ping
         $pingers += $p; $tasks += $p.SendPingAsync($t, 1000)
       }
-      try { [System.Threading.Tasks.Task]::WaitAll([System.Threading.Tasks.Task[]]$tasks) } catch {}
+      # The sweep only exists to populate the ARP table; a ping that faults
+      # (no route, host gone) is the same as one that timed out, and the
+      # neighbour table read below is the result either way.
+      try { [System.Threading.Tasks.Task]::WaitAll([System.Threading.Tasks.Task[]]$tasks) }
+      catch { Write-Verbose "ping batch at offset ${i}: $($_.Exception.Message)" }
       $pingers | ForEach-Object { $_.Dispose() }
     }
   }
@@ -81,7 +85,7 @@ try {
   $m = "M-SEARCH * HTTP/1.1`r`nHOST: 239.255.255.250:1900`r`nMAN: `"ssdp:discover`"`r`nMX: 2`r`nST: upnp:rootdevice`r`n`r`n"
   $b = [Text.Encoding]::ASCII.GetBytes($m)
   $udp.Send($b,$b.Length,(New-Object System.Net.IPEndPoint([System.Net.IPAddress]::Parse("239.255.255.250"),1900))) | Out-Null
-  for($i=0;$i -lt 25;$i++){ try { $r=New-Object System.Net.IPEndPoint([System.Net.IPAddress]::Any,0); $d=$udp.Receive([ref]$r); $ssdpHosts[$r.Address.ToString()]=$true } catch { break } }
+  for($i=0;$i -lt 25;$i++){ try { $r=New-Object System.Net.IPEndPoint([System.Net.IPAddress]::Any,0); $null=$udp.Receive([ref]$r); $ssdpHosts[$r.Address.ToString()]=$true } catch { break } }
   $udp.Close()
   Log "SSDP M-SEARCH from $LocalIp   [passive discovery]  found $($ssdpHosts.Count)"
 } catch { Log "SSDP failed: $($_.Exception.Message)" }
@@ -93,7 +97,9 @@ function Get-Vendor($mac){
   $pfx = ($mac -replace '[:-]','').Substring(0,6).ToUpper()
   $line = Select-String -Path $ouiFile -Pattern "^$pfx\s" -ErrorAction SilentlyContinue | Select-Object -First 1
   $rand = ""
-  try { if([Convert]::ToInt32($mac.Substring(0,2) -replace '[:-]','',16) -band 2){ $rand=" [RANDOMIZED]" } } catch {}
+  # A MAC whose first octet will not parse is reported without the flag rather than failing the inventory.
+  try { if([Convert]::ToInt32($mac.Substring(0,2) -replace '[:-]','',16) -band 2){ $rand=" [RANDOMIZED]" } }
+  catch { Write-Verbose "could not read the locally-administered bit of '$mac': $($_.Exception.Message)" }
   if($line){ (($line.Line -replace "^\S+\s+","")) + $rand } else { "unknown$rand" }
 }
 
