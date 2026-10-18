@@ -1,0 +1,162 @@
+# personal-soc's threat model, declared in the repository (MyKronos spec 28 §8,
+# schema v1).
+#
+# MyKronos's threat-model-sync job reads this file from `main` every six hours
+# and loads it read-only: rows declared here are changed by pull request, not
+# through the MyKronos API or UI. An invalid file changes nothing; deleting the
+# file withdraws every row it declared.
+#
+# Authored for TheHub #60834 (S11b of epic #60822) from a read-only recon of the
+# host on 2026-10-17 (21:21-21:33 -07:00): scheduled tasks, Concourse anonymous
+# reads, listening ports. personal-soc runs no service, listens on no port and
+# ships no container. Its runtime is three Windows scheduled tasks and a
+# Concourse pipeline; its data stays git-ignored on local disk except for the
+# network-assessment run archives it publishes to MyKronos.
+#
+# Selectors place findings in a surface (mykronos surface_match): `paths` for
+# sast/secrets/iac/sca. Re-confirming a control is editing its `reviewed_at`.
+
+version: 1
+
+assets:
+  - id: netassess-output
+    name: Network assessment output
+    description: >-
+      Host inventories, Wi-Fi posture, external exposure and breach checks for
+      the home LAN (latest run 2026-10-16, score 62). Lists every device's MAC
+      address, open services and known weaknesses: router Telnet and SSH
+      reachable from the guest network, an end-of-life ISP gateway, a flat /24,
+      unauthenticated SOCKS5 on two Amazon devices. A ready-made attack map.
+      Written under the user's profile, git-ignored; each run archive is also
+      published to MyKronos's MinIO.
+    exposure: local
+    sensitivity: pii
+    cr: H
+    ir: M
+    evidence_ref: skills/network-assessment/SKILL.md
+    selectors:
+      paths:
+        - skills/network-assessment/**
+
+  - id: personal-identifiers
+    name: Personal identifiers, OSINT self-profile and weekly threat briefs
+    description: >-
+      The owner's identifiers and OSINT self-profile used by
+      personal-threat-monitor (references/profile.md and identifiers.md, filled
+      locally from the *.example.md templates), and the weekly briefs it writes.
+      Git-ignored, local disk only. Combined with the network inventory this is
+      a targeting package for the owner.
+    exposure: local
+    sensitivity: pii
+    cr: H
+    evidence_ref: skills/personal-threat-monitor/SKILL.md
+    selectors:
+      paths:
+        - skills/personal-threat-monitor/**
+
+  - id: wifi-profiles
+    name: Saved Wi-Fi profiles
+    description: >-
+      Get-WifiPosture reads saved profiles with `key=clear` to judge key
+      strength. The pre-shared key is held in memory only; the script records
+      its length, never its value.
+    exposure: local
+    sensitivity: credentials
+    evidence_ref: skills/network-assessment/scripts/Get-WifiPosture.ps1
+    selectors:
+      paths:
+        - skills/network-assessment/scripts/Get-WifiPosture.ps1
+
+entry_points:
+  - id: third-party-lookups
+    name: Third-party lookups (HIBP, Shodan internetdb, ipify), outbound
+    description: >-
+      The only network traffic this repository's code originates: breach
+      lookups against Have I Been Pwned, the public IP from ipify and its
+      exposure from Shodan internetdb. Identifiers and the public IP leave the
+      host by design; responses are parsed as data.
+    exposure: internet
+    evidence_ref: skills/personal-threat-monitor/scripts/Invoke-BreachCheck.ps1
+    selectors:
+      paths:
+        - skills/personal-threat-monitor/scripts/**
+        - skills/network-assessment/scripts/Get-ExternalExposure.ps1
+
+  - id: scheduled-tasks
+    name: Windows scheduled tasks (Weekly Network Scan, Weekly Threat Monitor, Skill Install every 5 min)
+    description: >-
+      Three tasks run PowerShell as the user with -ExecutionPolicy Bypass on the
+      task command line (the scripts themselves do not ask for it): the weekly
+      network scan plus publish-netassess-run.ps1 (last 2026-10-12, result 0),
+      the weekly threat monitor (last 2026-10-11, result 0) and the skill
+      installer every 5 minutes. Anyone who can write the referenced script
+      paths gets code execution as the user.
+    exposure: local
+    evidence_ref: skills/network-assessment/scripts/Invoke-WeeklyNetworkScan.ps1
+    selectors:
+      paths:
+        - skills/network-assessment/scripts/Invoke-WeeklyNetworkScan.ps1
+
+  - id: concourse-pipeline
+    name: Concourse personal-soc pipeline (127.0.0.1:8080, public=true)
+    description: >-
+      Concourse is the only network-facing surface for this repository. The
+      pipeline is public, so its config and build metadata are anonymously
+      readable from the host (2026-10-17). Defined in the mykronos repository.
+    exposure: local
+    evidence_ref: https://github.com/ToddGBenson/mykronos/blob/main/deploy/concourse/set-personal-soc-pipeline.ps1
+
+trust_boundaries:
+  - id: scan-results-to-mykronos
+    name: Host scan results -> MinIO / MyKronos netassess ingest
+    description: >-
+      publish-netassess-run.ps1 (in the mykronos repository) uploads each run
+      archive to MyKronos's MinIO, moving the home-LAN inventory out of the
+      local git-ignored folder into the MyKronos estate, where it inherits
+      MyKronos's controls (MinIO root credentials, LAN firewall block).
+    exposure: local
+    evidence_ref: https://github.com/ToddGBenson/mykronos/blob/main/deploy/concourse/publish-netassess-run.ps1
+
+  - id: skill-install
+    name: "Skill install path: mykronos/deploy/personal-soc -> ~/.claude/skills (every 5 minutes)"
+    description: >-
+      Skill code is copied into the user's Claude skills directory every 5
+      minutes with no integrity check. Whoever can modify the source tree
+      controls instructions and scripts later run with the user's privileges in
+      Claude sessions, including the network scanner.
+    exposure: local
+    evidence_ref: https://github.com/ToddGBenson/mykronos/blob/main/deploy/personal-soc/Install-PersonalSocSkills.ps1
+
+controls:
+  - id: native-command-invocation
+    kind: input_validation
+    stride: tampering
+    description: >-
+      Native commands are invoked with the call operator and argument arrays,
+      never built into a string for Invoke-Expression, and the HIBP query
+      escapes the address with [uri]::EscapeDataString.
+    evidence_ref: skills/personal-threat-monitor/scripts/Invoke-BreachCheck.ps1
+    applies_to: third-party-lookups
+    reviewed_at: 2026-10-17
+
+  - id: psk-never-written
+    kind: secrets_management
+    stride: information_disclosure
+    description: >-
+      Wi-Fi pre-shared keys are read to measure strength and never written:
+      only KeyLen reaches the output.
+    evidence_ref: skills/network-assessment/scripts/Get-WifiPosture.ps1
+    applies_to: wifi-profiles
+    reviewed_at: 2026-10-17
+
+  - id: no-personal-data-guard
+    kind: secrets_management
+    stride: information_disclosure
+    description: >-
+      The guard workflow fails the build if a filled profile.md or
+      identifiers.md is ever tracked (only *.example.md templates may be).
+      Its last recorded run was 2026-08-12 (success); it has not run on the
+      pull requests since, so treat it as present but not currently exercised.
+    evidence_ref: .github/workflows/guard.yml
+    applies_to: personal-identifiers
+    reviewed_at: 2026-10-17
