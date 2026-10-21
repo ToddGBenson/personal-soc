@@ -1,0 +1,25 @@
+# Public (WAN) ports that are intentionally reachable from the internet.
+#
+# Read by scripts/Get-ExternalExposure.ps1 (Read-ExposureAllowlist in
+# scripts/NetAssess.Verdicts.ps1), which the weekly Concourse job
+# `external-exposure` runs. Any port Shodan InternetDB reports open on the
+# household public IP that is NOT listed here fails that job and posts to the
+# pipeline's Slack alert channel (TheHub #60852). A missing or unreadable file
+# is "could not check" (exit 2), never a pass.
+#
+# STARTS EMPTY ON PURPOSE. As of 2026-10-20 InternetDB shows 7547 open
+# (TR-069 / CWMP - almost certainly the ISP gateway's remote-management port;
+# see references/external-exposure.md). Whether to accept it is Todd's call
+# and has not been made, so until it is, the job stays red on 7547. To accept
+# it, replace the empty list with:
+#
+#   allowed_ports:
+#     - port: 7547
+#       reason: TR-069 ISP gateway management; cannot be closed on the ISP router
+#
+# Format (deliberately small - no YAML module is assumed): one key,
+# `allowed_ports`, as `[]`, an inline list `[443, 8443]`, or a block list of
+# `- port: N` (optionally with `reason:`) or `- N` items. Anything else is
+# rejected rather than guessed at. Give every entry a reason.
+
+allowed_ports: []

@@ -291,3 +291,180 @@ function Get-OpenApVerdict {
     if ($aside) { return "no open AP of ours ($aside)" }
     return 'no open AP'
 }
+
+# ---------------------------------------------------------------------------
+# External (WAN) exposure against an allowlist  (TheHub #60852)
+#
+# external-exposure used to print "Ports are visible from the internet" and
+# exit 0, so a port Shodan could see on the household IP was a green build
+# (2026-10: 7547 open, job succeeded). The rule now: every public port must be
+# named in config/exposure-allowlist.yml, or the check fails.
+# ---------------------------------------------------------------------------
+
+function Read-ExposureAllowlist {
+    <#
+    .SYNOPSIS
+        The ports config/exposure-allowlist.yml accepts as intentional.
+
+    .DESCRIPTION
+        No YAML module is assumed: the task image is stock PowerShell and the
+        Scheduled Task is Windows PowerShell 5.1. So this reads one key,
+        `allowed_ports`, in exactly three shapes, and THROWS on anything else.
+        A file that cannot be read is a check that cannot run, and that must
+        not become "nothing is allowlisted, so..." or "everything is":
+
+            allowed_ports: []
+            allowed_ports: [443, 8443]
+            allowed_ports:
+              - port: 443          # further keys (reason:) are ignored
+                reason: ...
+              - 8443
+
+    .PARAMETER Path
+        The allowlist file.
+
+    .OUTPUTS
+        [int[]] - possibly empty. Never $null on success.
+    #>
+    # object[] is how the analyser reads `return , $array`; the elements are
+    # int and the array arrives whole (an empty list stays an empty array).
+    [CmdletBinding()]
+    [OutputType([object[]])]
+    param([Parameter(Mandatory)][string]$Path)
+
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        throw "exposure allowlist not found: $Path"
+    }
+    # Comments go first, so a '#' inside a reason cannot be read as data.
+    $lines = @(Get-Content -LiteralPath $Path | ForEach-Object { ($_ -replace '\s+#.*$', '') -replace '^\s*#.*$', '' })
+
+    function ConvertTo-Port([string]$Text) {
+        $n = 0
+        if (-not [int]::TryParse($Text.Trim(), [ref]$n) -or $n -lt 1 -or $n -gt 65535) {
+            throw "exposure allowlist ${Path}: '$Text' is not a port number (1-65535)"
+        }
+        return $n
+    }
+
+    $keyAt = -1
+    for ($i = 0; $i -lt $lines.Count; $i++) {
+        if ($lines[$i] -match '^allowed_ports\s*:(.*)$') { $keyAt = $i; break }
+    }
+    if ($keyAt -lt 0) { throw "exposure allowlist ${Path}: no 'allowed_ports:' key" }
+
+    $ports = New-Object System.Collections.Generic.List[int]
+    $rest = $Matches[1].Trim()
+    if ($rest) {
+        if ($rest -notmatch '^\[(.*)\]$') { throw "exposure allowlist ${Path}: 'allowed_ports: $rest' is neither [] nor a list" }
+        foreach ($p in ($Matches[1] -split ',')) { if ($p.Trim()) { $ports.Add((ConvertTo-Port $p)) } }
+        return , $ports.ToArray()
+    }
+
+    for ($i = $keyAt + 1; $i -lt $lines.Count; $i++) {
+        $l = $lines[$i]
+        if (-not $l.Trim()) { continue }
+        if ($l -match '^\S') { break }                                   # next top-level key
+        if ($l -match '^\s*-\s*port\s*:\s*(.+)$') { $ports.Add((ConvertTo-Port $Matches[1])); continue }
+        if ($l -match '^\s*-\s*[A-Za-z_]+\s*:')   { continue }               # item opens with reason:, port: follows
+        if ($l -match '^\s*-\s*(.+)$')            { $ports.Add((ConvertTo-Port $Matches[1])); continue }
+        if ($l -match '^\s+port\s*:\s*(.+)$')     { $ports.Add((ConvertTo-Port $Matches[1])); continue }
+        if ($l -match '^\s+[A-Za-z_]+\s*:')       { continue }               # reason: etc. under an item
+        throw "exposure allowlist ${Path}: cannot read line '$($l.Trim())'"
+    }
+    return , $ports.ToArray()
+}
+
+function Get-ExposureVerdict {
+    <#
+    .SYNOPSIS
+        Which of the publicly visible ports are not on the allowlist.
+
+    .PARAMETER Ports
+        Ports InternetDB reports open on the public IP. Empty or $null means
+        none visible.
+
+    .PARAMETER Allowed
+        Read-ExposureAllowlist's result.
+
+    .OUTPUTS
+        Pass (bool), Unexpected (int[]), Allowlisted (int[]), Summary (string).
+    #>
+    [CmdletBinding()]
+    [OutputType([pscustomobject])]
+    param([int[]]$Ports, [int[]]$Allowed)
+
+    $seen = @($Ports | Where-Object { $null -ne $_ } | Sort-Object -Unique)
+    $ok = @($Allowed)
+    $unexpected = @($seen | Where-Object { $ok -notcontains $_ })
+    $listed = @($seen | Where-Object { $ok -contains $_ })
+
+    $summary = if (-not $seen.Count) { 'no public ports visible' }
+    elseif ($unexpected.Count) { "NOT ALLOWLISTED: $($unexpected -join ', ')" + $(if ($listed.Count) { " (allowlisted: $($listed -join ', '))" } else { '' }) }
+    else { "all visible ports allowlisted: $($listed -join ', ')" }
+
+    return [pscustomobject]@{
+        Pass        = ($unexpected.Count -eq 0)
+        Unexpected  = [int[]]$unexpected
+        Allowlisted = [int[]]$listed
+        Summary     = $summary
+    }
+}
+
+# ---------------------------------------------------------------------------
+# NAS shares listed by `net view`  (TheHub #60852)
+#
+# The weekly scan reported only a count ("NAS anonymous shares listed: 5") and
+# nothing gated on it, so five listed shares passed netassess-ingest. It also
+# counted 'Disk' lines in whatever net view printed, so a net view that FAILED
+# (NAS off, path not found) counted 0 - the same as a NAS that lists nothing.
+# ---------------------------------------------------------------------------
+
+function Get-NetViewShareVerdict {
+    <#
+    .SYNOPSIS
+        The share names `net view \\host` listed, or unknown when it did not
+        answer.
+
+    .DESCRIPTION
+        net view prints a dashed rule, then one row per share: name, two or
+        more spaces, type. A name too long for its column is printed on a line
+        of its own with the type on the next line, indented; both are handled.
+        Only Disk shares are counted, as before.
+
+        The run counts as answered only on one of net view's two success
+        lines ("The command completed successfully." / "There are no entries
+        in the list."). Anything else - "System error 53", access denied, a
+        non-English Windows - is unknown, which netassess-ingest treats as
+        "did not run, so not a pass".
+
+    .PARAMETER NetViewText
+        Combined output of `net view \\<host> 2>&1`.
+
+    .OUTPUTS
+        Count ([int], -1 when unknown), Names (string[]), Status (string, the
+        text for network-status.md: '0', '2 (media, public)' or 'unknown (...)').
+    #>
+    [CmdletBinding()]
+    [OutputType([pscustomobject])]
+    param([AllowEmptyString()][string]$NetViewText)
+
+    $text = "$NetViewText"
+    if ($text -notmatch 'The command completed successfully|There are no entries in the list') {
+        $first = @($text -split "`r?`n" | Where-Object { $_.Trim() } | Select-Object -First 1)
+        $why = if ($first.Count) { $first[0].Trim() } else { 'no output' }
+        return [pscustomobject]@{ Count = -1; Names = @(); Status = "unknown (net view did not answer: $why)" }
+    }
+
+    $names = New-Object System.Collections.Generic.List[string]
+    $rows = @($text -split "`r?`n")
+    $start = 0
+    for ($i = 0; $i -lt $rows.Count; $i++) { if ($rows[$i] -match '^-{10,}') { $start = $i + 1; break } }
+    for ($i = $start; $i -lt $rows.Count; $i++) {
+        $r = $rows[$i]
+        if ($r -match '^(?<n>\S.*?)\s{2,}Disk(\s|$)') { $names.Add($Matches['n'].Trim()); continue }
+        if ($r -match '^\s+Disk(\s|$)' -and $i -gt $start -and $rows[$i - 1].Trim()) { $names.Add($rows[$i - 1].Trim()) }
+    }
+
+    $status = if ($names.Count) { "$($names.Count) ($($names -join ', '))" } else { '0' }
+    return [pscustomobject]@{ Count = $names.Count; Names = [string[]]$names.ToArray(); Status = $status }
+}

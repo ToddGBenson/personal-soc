@@ -68,7 +68,17 @@ $nfsOpen = $nfsRun.Verdict
 
 $smb = (& $NmapPath -sT -Pn '-p139,445' --script smb-protocols $nasGuess 2>$null | Out-String)
 $smbv1 = if($smb -match 'NT LM 0\.12'){'SMBv1 ENABLED'} elseif($smb -match '2\.0\.2|3\.1\.1'){'SMB2/3 only'} else{'unknown'}
-$anon = (net view "\\$nasGuess" 2>&1 | Select-String 'Disk').Count
+# WAS: `(net view ... | Select-String 'Disk').Count`. Two faults (TheHub #60852):
+# only a count reached network-status.md, so nobody could see WHICH shares were
+# listed; and a net view that failed outright (NAS off, "System error 53")
+# counted 0 - the same as a NAS that lists nothing. Get-NetViewShareVerdict
+# (fixtures in tests/Test-NetViewShareVerdict.ps1) names the shares and says
+# 'unknown' when net view did not answer. netassess-ingest gates on both.
+# Note: net view runs as the Scheduled Task's account, so "anonymous" here
+# means "listed without credentials being supplied to this command".
+$netView = net view "\\$nasGuess" 2>&1 | Out-String
+$netView | Set-Content "$out\raw\nas-netview.txt"
+$anon = (Get-NetViewShareVerdict -NetViewText $netView).Status
 
 # mechanical Wi-Fi checks
 # WAS: `if($wifi -match 'SmartLife-6A82')`. It matched ONE SSID by NAME and
@@ -98,7 +108,10 @@ $openAP = Get-OpenApVerdict -NetshText $wifiTxt -GatewayMac $gwMac
 $extPorts = 'n/a'
 if(Test-Path "$out\external-exposure.json"){
   try { $ext = Get-Content "$out\external-exposure.json" -Raw | ConvertFrom-Json
-        $extPorts = if($ext.ports){ ($ext.ports -join ', ') } else { 'none visible' } }
+        $extPorts = if($ext.ports){ ($ext.ports -join ', ') } else { 'none visible' }
+        # Set by Get-ExternalExposure against config/exposure-allowlist.yml (#60852).
+        $unexpected = @($ext.unexpected_ports | Where-Object { $null -ne $_ })
+        if($unexpected.Count){ $extPorts += " (NOT allowlisted: $($unexpected -join ', '))" } }
   catch {
     # The report keeps 'n/a' (no answer, same as a missing file), but a file
     # that exists and will not parse is a broken check, not an absent one, so

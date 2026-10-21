@@ -5,6 +5,12 @@
 .DESCRIPTION
   Finds the commit that last touched the doc, then shows source files under the
   given paths that have commits after it. Read-only (git history only).
+
+  REPORT ONLY. Drift is listed for a human to review; finding it never makes this
+  script exit non-zero, so nothing that runs it (the Concourse doc-drift job included)
+  fails a build on drift. It exits non-zero only when it cannot answer at all - not a
+  git repository, or the doc does not exist - because an unanswered check is not a
+  clean one.
 .EXAMPLE
   .\Find-DocDrift.ps1 -Doc README.md -Paths src,scripts
 .EXAMPLE
@@ -34,6 +40,7 @@ try {
   Write-Host "Doc:        $Doc" -ForegroundColor Cyan
   Write-Host "Last doc'd: $docDate ($($docCommit.Substring(0,8)))" -ForegroundColor Cyan
   Write-Host "Checking:   $($Paths -join ', ')" -ForegroundColor Cyan
+  Write-Host "Mode:       report only - drift is listed for review and never fails the build" -ForegroundColor Cyan
   Write-Host ""
 
   # source files changed AFTER the doc's last commit
@@ -48,5 +55,6 @@ try {
       "{0,-55} {1}" -f $f, $when
     }
     Write-Host "`nNext: read these files (ground truth), then update $Doc per the content model." -ForegroundColor DarkGray
+    Write-Host "(Report only: drift candidates do not fail the build.)" -ForegroundColor DarkGray
   }
 } finally { Pop-Location }
