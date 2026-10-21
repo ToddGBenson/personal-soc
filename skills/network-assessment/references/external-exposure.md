@@ -12,6 +12,9 @@ Resolves your public IP (ipify/ifconfig.me), then queries **Shodan InternetDB** 
   - Any **forwarded service** you (or UPnP) opened — the highest-priority thing to review and close if unneeded.
 - **Hostname** often reveals ISP + region (e.g. a PTR like `...<region>.<isp>.net` → ISP + metro) — normal, but note it's public.
 
+## The allowlist gate
+Every visible port is checked against `config/exposure-allowlist.yml`. A port not on it makes the script exit **1** (the weekly Concourse `external-exposure` job goes red and posts to the alert channel); a check that could not run - no public IP, InternetDB error, unreadable allowlist - exits **2**, never 0. A 404 or an empty port list exits 0. The file ships **empty**: 7547 stays an alert until the owner decides to accept it, and every entry should carry a `reason:`.
+
 ## Accuracy caveats
 - InternetDB reflects Shodan's **last scan**, not a live probe — it can be stale or miss a just-opened port.
 - Residential IPs **rotate** (DHCP), so re-check; a finding may belong to a prior lease.
