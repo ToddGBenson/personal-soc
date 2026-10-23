@@ -133,6 +133,7 @@ try {
 
     Reset-Fake
     Set-Reply 'breachedaccount' 'a@example.com' @(401)
+    Set-Reply 'pasteaccount'    'a@example.com' @(404)
     $r = Invoke-Under -Emails 'a@example.com' -Extra $key
     Check -Name "401 stops the run as an invalid key" -Test { $r.Threw -and $r.Error -like '*401*invalid API key*' -and -not $r.Report } -Shown $r.Error
 
@@ -187,14 +188,16 @@ try {
 
     Reset-Fake
     Set-Reply 'breachedaccount' 'a@example.com' @(500)
+    # The paste lookup answers, so the 500 is the only thing that can abort.
+    Set-Reply 'pasteaccount'    'a@example.com' @(404)
     $r = Invoke-Under -Emails 'a@example.com' -Extra $key
-    Check -Name "500 aborts; it is not written down as clean" -Test { $r.Threw -and -not $r.Report } -Shown $r.Error
+    Check -Name "500 aborts; it is not written down as clean" -Test { $r.Threw -and $r.Error -eq 'HTTP 500' -and -not $r.Report } -Shown $r.Error
 
     Reset-Fake
     Set-Reply 'breachedaccount' 'a@example.com' @(404)
     Set-Reply 'pasteaccount'    'a@example.com' @(503)
     $r = Invoke-Under -Emails 'a@example.com' -Extra $key
-    Check -Name "a failed paste lookup aborts too" -Test { $r.Threw -and -not $r.Report } -Shown $r.Error
+    Check -Name "a failed paste lookup aborts too" -Test { $r.Threw -and $r.Error -eq 'HTTP 503' -and -not $r.Report } -Shown $r.Error
 
     Reset-Fake
     $FakeHibpRetryAfter = '7'
