@@ -32,10 +32,13 @@ try {
   if (-not $insideWorkTree) { throw "Not a git repository: $Repo" }
   if (-not (Test-Path $Doc)) { throw "Doc not found: $Doc" }
 
-  # commit that last modified the doc
-  $docCommit = (git log -1 --format='%H' -- "$Doc").Trim()
+  # commit that last modified the doc. Wrapped in "$()" because git prints
+  # nothing for a doc with no history, and $null.Trim() threw before the
+  # warning below could be reached (TheHub #60939).
+  $docCommit = "$(git log -1 --format='%H' -- "$Doc")".Trim()
   if (-not $docCommit) { Write-Warning "No commit history for $Doc (uncommitted?). Treating all source as newer."; $docCommit = (git rev-list --max-parents=0 HEAD | Select-Object -Last 1).Trim() }
-  $docDate = (git log -1 --format='%ci' -- "$Doc").Trim()
+  $docDate = "$(git log -1 --format='%ci' -- "$Doc")".Trim()
+  if (-not $docDate) { $docDate = 'never committed' }
 
   Write-Host "Doc:        $Doc" -ForegroundColor Cyan
   Write-Host "Last doc'd: $docDate ($($docCommit.Substring(0,8)))" -ForegroundColor Cyan
