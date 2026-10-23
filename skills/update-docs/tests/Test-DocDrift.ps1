@@ -48,7 +48,7 @@ function G {
     if ($LASTEXITCODE -ne 0) { throw "git $($args -join ' ') exited $LASTEXITCODE" }
 }
 
-function New-Repo([string]$Name) {
+function MakeRepo([string]$Name) {
     $p = Join-Path $tmp $Name
     New-Item -ItemType Directory -Path $p | Out-Null
     Push-Location $p
@@ -84,7 +84,7 @@ try {
     Write-Host ""
     Write-Host "drift and no drift"
 
-    New-Repo 'r1' | Out-Null
+    MakeRepo -Name 'r1' | Out-Null
     $o = Invoke-Drift @{ Doc = 'README.md'; Paths = 'src' }
     Check -Name "doc is the newest change -> likely current" -Test { $o -match 'likely current' -and $o -notmatch 'src/' } -Shown ''
 
@@ -146,7 +146,7 @@ try {
     Write-Host ""
     Write-Host "an uncommitted doc"
 
-    New-Repo 'r2' | Out-Null
+    MakeRepo -Name 'r2' | Out-Null
     Edit-Commit 'src/a.ps1' 'Write-Output 2'
     Set-Content NEW.md 'new doc, never committed'
     $o = Invoke-Drift @{ Doc = 'NEW.md'; Paths = 'src' }
