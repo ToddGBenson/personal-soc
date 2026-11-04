@@ -74,7 +74,9 @@ entry_points:
       The only network traffic this repository's code originates: breach
       lookups against Have I Been Pwned, the public IP from ipify and its
       exposure from Shodan internetdb. Identifiers and the public IP leave the
-      host by design; responses are parsed as data.
+      host by design; responses are parsed as data. The key-free breach watch
+      (Get-NewBreaches.ps1) downloads only the public breach catalogue and
+      sends no identifier.
     exposure: internet
     evidence_ref: skills/personal-threat-monitor/scripts/Invoke-BreachCheck.ps1
     selectors:
@@ -138,6 +140,19 @@ controls:
     evidence_ref: skills/personal-threat-monitor/scripts/Invoke-BreachCheck.ps1
     applies_to: third-party-lookups
     reviewed_at: 2026-10-17
+
+  - id: catalogue-only-breach-watch
+    kind: secrets_management
+    stride: information_disclosure
+    description: >-
+      The key-free breach watch sends one GET for HIBP's public breach
+      catalogue with no query, body or API key, and matches the owner's
+      account domains locally; the domains file is git-ignored
+      (*.local.*). Test-NewBreaches.ps1 asserts no listed domain appears in
+      the request.
+    evidence_ref: skills/personal-threat-monitor/scripts/Get-NewBreaches.ps1
+    applies_to: third-party-lookups
+    reviewed_at: 2026-11-04
 
   - id: psk-never-written
     kind: secrets_management

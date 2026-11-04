@@ -61,6 +61,7 @@ Keep everything local and confidential. If the user wants a formatted artifact, 
 
 - **Verify before asserting** (`references/verification.md`) — common-name OSINT hits are *candidates* until confirmed; keep them off the profile/report and on a `verify-checklist.md` until the user rules on them.
 - **Confirm breaches** (`scripts/Invoke-BreachCheck.ps1` + `references/breach-confirmation.md`) — HIBP/DeHashed turn "likely breached" into dated, confirmed exposure (needs a HIBP API key; never commit it).
+- **Watch for new breaches, no key** (`scripts/Get-NewBreaches.ps1`) — needs no API key and costs nothing: downloads HIBP's public breach catalogue in one request that carries nothing about the user, and matches it on this machine against the services listed in `references/account-domains.local.txt` (git-ignored; start from `account-domains.example.txt`). Writes `new-breaches.json`; exit 0 nothing new, 1 a service the user has an account with was newly breached (confirm with the keyed check above, then rotate), 2 unknown, which is not a pass. Default window is the last 8 days, so a weekly run overlaps by one. It says a *service* was breached, not that the user's account was in it.
 - **Beyond cyber** (`references/risk-domains.md`) — identity-theft, physical/home, travel/personal-safety, and financial-risk domains, surfaced in the digest only when active and applicable.
 
 ## Automation

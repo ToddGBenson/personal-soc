@@ -1,0 +1,9 @@
+# Account domains for the key-free breach watch (scripts/Get-NewBreaches.ps1).
+# PLACEHOLDERS ONLY. Copy to account-domains.local.txt (git-ignored by *.local.*)
+# and list the services you hold accounts with, one bare domain per line.
+# A listed domain also covers its subdomains. '#' starts a comment.
+# This list never leaves the machine: the script downloads HIBP's public
+# catalogue and compares it here.
+example.com
+example.net
+shop.example.org
