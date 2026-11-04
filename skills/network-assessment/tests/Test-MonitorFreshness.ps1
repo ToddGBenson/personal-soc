@@ -43,7 +43,7 @@ $today = [datetime]'2026-11-09'   # a Monday, when the network scan runs
 $tmp = Join-Path ([IO.Path]::GetTempPath()) ("monitor-fresh-test-" + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $tmp | Out-Null
 $n = 0
-function New-Root { $script:n++; $r = Join-Path $tmp "root$script:n"; New-Item -ItemType Directory -Path $r | Out-Null; return $r }
+function Add-Root { $script:n++; $r = Join-Path $tmp "root$script:n"; New-Item -ItemType Directory -Path $r | Out-Null; return $r }
 function Add-Run([string]$Root, [string]$Name, [string[]]$Files = @('threat-brief.md', 'security-digest.md', 'footprint.json')) {
     $d = Join-Path $Root $Name
     New-Item -ItemType Directory -Force -Path $d | Out-Null
@@ -64,35 +64,35 @@ try {
 
     $all = @()
 
-    $r = New-Root; Add-Run $r '2026-11-08'
+    $r = Add-Root; Add-Run $r '2026-11-08'
     $v = Verdict $r; $all += $v
     Check -Name "1 day old: fresh" -Test { $v.Status -eq '2026-11-08 (1 days)' } -Shown $v.Status
     Check -Name "Status is a string" -Test { $v.Status -is [string] } -Shown "$($v.Status.GetType().Name)"
 
-    $r = New-Root; Add-Run $r '2026-11-02'
+    $r = Add-Root; Add-Run $r '2026-11-02'
     $v = Verdict $r; $all += $v
     Check -Name "exactly 7 days old: fresh" -Test { $v.Status -eq '2026-11-02 (7 days)' } -Shown $v.Status
 
-    $r = New-Root; Add-Run $r '2026-11-01'
+    $r = Add-Root; Add-Run $r '2026-11-01'
     $v = Verdict $r; $all += $v
     Check -Name "8 days old: unknown" -Test { $v.Status.StartsWith('unknown (last complete run 2026-11-01, 8 days ago)') } -Shown $v.Status
 
     $v = Verdict $r 8; $all += $v
     Check -Name "8 days old with -MaxAgeDays 8: fresh" -Test { $v.Status -eq '2026-11-01 (8 days)' } -Shown $v.Status
 
-    $r = New-Root; Add-Run $r '2026-11-01'; Add-Run $r '2026-11-08' -Files @('threat-brief.md', 'footprint.json')
+    $r = Add-Root; Add-Run $r '2026-11-01'; Add-Run $r '2026-11-08' -Files @('threat-brief.md', 'footprint.json')
     $v = Verdict $r; $all += $v
     Check -Name "incomplete newest skipped for older complete one" -Test { $v.Status.StartsWith('unknown (last complete run 2026-11-01, 8 days ago)') } -Shown $v.Status
 
-    $r = New-Root; Add-Run $r '2026-11-05'; Add-Run $r '2026-11-08' -Files @()
+    $r = Add-Root; Add-Run $r '2026-11-05'; Add-Run $r '2026-11-08' -Files @()
     $v = Verdict $r; $all += $v
     Check -Name "empty newest folder skipped" -Test { $v.Status -eq '2026-11-05 (4 days)' } -Shown $v.Status
 
-    $r = New-Root
+    $r = Add-Root
     $v = Verdict $r; $all += $v
     Check -Name "no folders: unknown (no completed run under root)" -Test { $v.Status -eq "unknown (no completed run under $r)" } -Shown $v.Status
 
-    $r = New-Root; Add-Run $r '2026-11-08' -Files @('threat-brief.md')
+    $r = Add-Root; Add-Run $r '2026-11-08' -Files @('threat-brief.md')
     $v = Verdict $r; $all += $v
     Check -Name "only incomplete runs: no completed run" -Test { $v.Status -eq "unknown (no completed run under $r)" } -Shown $v.Status
 
@@ -100,16 +100,16 @@ try {
     $v = Verdict $missing; $all += $v
     Check -Name "missing root: unknown (root not found)" -Test { $v.Status -eq "unknown ($missing not found)" } -Shown $v.Status
 
-    $r = New-Root; Add-Run $r '2026-10-30'; Add-Run $r 'latest'; Add-Run $r '2026-11-08-copy'; Add-Run $r '2026-13-45'
+    $r = Add-Root; Add-Run $r '2026-10-30'; Add-Run $r 'latest'; Add-Run $r '2026-11-08-copy'; Add-Run $r '2026-13-45'
     Set-Content -LiteralPath (Join-Path $r '2026-11-07') -Value 'a file, not a folder'
     $v = Verdict $r; $all += $v
     Check -Name "non-date folders, bad dates and files ignored" -Test { $v.Status.StartsWith('unknown (last complete run 2026-10-30, 10 days ago)') } -Shown $v.Status
 
-    $r = New-Root; Add-Run $r '2026-11-06'; Add-Run $r '2026-11-20'
+    $r = Add-Root; Add-Run $r '2026-11-06'; Add-Run $r '2026-11-20'
     $v = Verdict $r; $all += $v
     Check -Name "a folder dated after Today is not a run yet" -Test { $v.Status -eq '2026-11-06 (3 days)' } -Shown $v.Status
 
-    $r = New-Root; Add-Run $r '2026-11-09'
+    $r = Add-Root; Add-Run $r '2026-11-09'
     $v = Verdict $r; $all += $v
     Check -Name "run dated Today: 0 days" -Test { $v.Status -eq '2026-11-09 (0 days)' } -Shown $v.Status
 
