@@ -59,6 +59,9 @@ try {
 
     $v = Verdict (Fixture 'garbled.json' '{"ip": "192.0.2.10", "ports": [443,')
     Check -Name "unparseable file is unknown (unreadable ...)" -Test { $v -like 'unknown (external-exposure.json unreadable*' } -Shown $v
+    # Windows PowerShell 5.1 quotes the JSON it failed on in the error, and the
+    # real file carries the household's public IP. The line is uploaded.
+    Check -Name "the file's content (public IP) is not quoted" -Test { $v -notmatch '192\.0\.2\.10' -and $v.Length -le 160 } -Shown $v
 
     $v = Verdict (Fixture 'empty.json' '')
     Check -Name "empty file is unknown (unreadable ...)" -Test { $v -like 'unknown (external-exposure.json unreadable*' } -Shown $v
