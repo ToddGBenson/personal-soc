@@ -61,6 +61,16 @@ try {
   $db = Invoke-RestMethod "https://internetdb.shodan.io/$pub" -TimeoutSec 15
 } catch {
   if($_.Exception.Response.StatusCode.value__ -eq 404){
+    # TheHub #60987: the weekly scan reads a missing external-exposure.json as
+    # 'unknown' (the check did not answer). A 404 IS an answer - nothing is
+    # indexed - so it is written down as an empty port list, which the weekly
+    # line reports as 'none visible'. indexed=false is the shape the lane wrote
+    # for this case before, and mykronos's network_exposure adapter reads it as
+    # the 404: a clean edge, no findings.
+    [PSCustomObject]@{
+      indexed=$false; ip=$pub; ports=@(); cves=@(); cpes=@(); hostnames=@(); tags=@()
+      unexpected_ports=@(); allowlisted_ports=@()
+    } | ConvertTo-Json -Depth 5 | Set-Content (Join-Path $OutDir 'external-exposure.json')
     Write-Host "`n  OK: Not in Shodan InternetDB (HTTP 404) - nothing externally indexed on $pub. Good sign." -ForegroundColor Green
     Write-Host "`n  NOTE: reflects Shodan's last scan; not a live probe. For a live external port test, use an authorized outside vantage." -ForegroundColor DarkGray
     exit 0

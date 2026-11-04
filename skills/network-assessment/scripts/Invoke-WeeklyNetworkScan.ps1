@@ -105,20 +105,14 @@ $openAP = Get-OpenApVerdict -NetshText $wifiTxt -GatewayMac $gwMac
 
 # external (WAN) exposure — what the internet sees (needs the home public IP, so it runs locally)
 & (Join-Path $PSScriptRoot 'Get-ExternalExposure.ps1') -OutDir $out *> "$out\raw\external-run.txt"
-$extPorts = 'n/a'
-if(Test-Path "$out\external-exposure.json"){
-  try { $ext = Get-Content "$out\external-exposure.json" -Raw | ConvertFrom-Json
-        $extPorts = if($ext.ports){ ($ext.ports -join ', ') } else { 'none visible' }
-        # Set by Get-ExternalExposure against config/exposure-allowlist.yml (#60852).
-        $unexpected = @($ext.unexpected_ports | Where-Object { $null -ne $_ })
-        if($unexpected.Count){ $extPorts += " (NOT allowlisted: $($unexpected -join ', '))" } }
-  catch {
-    # The report keeps 'n/a' (no answer, same as a missing file), but a file
-    # that exists and will not parse is a broken check, not an absent one, so
-    # say so rather than let it pass silently.
-    Write-Warning "external-exposure.json is unreadable, WAN ports reported as n/a: $($_.Exception.Message)"
-  }
-}
+# WAS: the WAN value defaulted to 'n/a' and kept it for a missing
+# external-exposure.json and for one that would not parse. netassess-ingest fails only on 'unknown', so from
+# 2026-08-24 to 2026-10-19 every weekly run passed a WAN check that had not
+# answered (TheHub #60987). Get-WanPortsVerdict (NetAssess.Verdicts.ps1,
+# fixtures in tests/Test-WanPortsVerdict.ps1) says 'unknown' for both, and
+# keeps the old wording for a definite answer.
+$extPorts = Get-WanPortsVerdict -ExposureJsonPath "$out\external-exposure.json"
+if($extPorts -like 'unknown*'){ Write-Warning "WAN ports: $extPorts" }
 
 @"
 ## Network status — $today (local scheduled scan)
