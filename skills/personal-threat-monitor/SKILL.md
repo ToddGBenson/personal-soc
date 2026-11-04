@@ -34,7 +34,7 @@ Goal: tell the user what is publicly discoverable about them, what changed since
 2. Sweep the source categories: search engines, data brokers, breach/paste exposure, social media, usenet/forums, code repos (they're a developer — watch for leaked secrets/emails in commits), professional networks, images, public records.
 3. With consent, check the user's own inbox for breach notifications, security alerts, standing OAuth grants, and linked/recovery identities (`references/osint-sources.md` has the Gmail query set).
 4. Classify each finding: category, what's exposed, severity, and — per the user's preference — a **removal action** from `references/broker-optout.md`.
-5. Diff against the previous run's `footprint.json`; surface *new* exposures prominently.
+5. Write `footprint.json` to the contract in `references/footprint-schema.json`, then diff it with `scripts/Compare-Footprint.ps1 -Baseline personal-monitor/<previous-date> -Current personal-monitor/<YYYY-MM-DD>` rather than by reading the two files. Each finding's `id` is its category plus its source (for example `broker:spokeo`, `breach:example.com`), never derived from the run date, so the same exposure keeps the same id every week. Severity is `page`, `nudge` or `log`; confidence is `confirmed`, `inferred` or `ambiguous`. Keep every finding from the previous run in the new file: status `removed` when you looked and it is gone, `untested` when you did not look this run. A finding left out is reported as `not_reassessed`, never as fixed. The script writes `footprint-diff.json` (`new`, `removed`, `not_reassessed`, `severity_changed`); surface `new` prominently and list `not_reassessed` as not checked. Exit 2 means a `footprint.json` broke the contract (the first failing JSON path is printed): fix the file and rerun, and do not report a diff from that run.
 
 ## Check B — Personalized threat intelligence (weekly brief)
 
@@ -49,7 +49,8 @@ Goal: a short, dated brief of threats that actually apply to *this* person this 
 
 ```
 personal-monitor/<YYYY-MM-DD>/
-  footprint.json     # Check A findings (structured, for diffing)
+  footprint.json     # Check A findings, per references/footprint-schema.json
+  footprint-diff.json # Compare-Footprint.ps1 against the previous run
   threat-brief.md    # Check B brief
   run-log.md         # sources queried + accounts accessed (audit trail)
   report.md          # combined human-readable digest (local file, NOT auto-published)

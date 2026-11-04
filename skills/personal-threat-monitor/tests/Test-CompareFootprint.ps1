@@ -120,12 +120,12 @@ try {
     Check -Name "valid baseline and current: exit 0" -Test { $r.Exit -eq 0 -and -not $r.Threw } -Shown "exit $($r.Exit) $($r.Output.Trim())"
     Check -Name "writes footprint-diff.json into the current run's folder" -Test { $r.Wrote } -Shown "$($r.Wrote)"
     Check -Name "new lists only the id first seen this run" -Test { (Ids $r.Diff 'new') -eq 'breach:example.com' } -Shown (Ids $r.Diff 'new')
-    Check -Name "an id reused across runs is not new" -Test { (Ids $r.Diff 'new') -notmatch 'broker:example-people' } -Shown (Ids $r.Diff 'new')
+    Check -Name "an id reused across runs is not new" -Test { $r.Wrote -and (Ids $r.Diff 'new') -notmatch 'broker:example-people' } -Shown (Ids $r.Diff 'new')
     Check -Name "removed lists the id whose status is 'removed' in current" -Test { (Ids $r.Diff 'removed') -eq 'social:example-forum' } -Shown (Ids $r.Diff 'removed')
     $nr = @((Ids $r.Diff 'not_reassessed') -split ',' | Sort-Object) -join ','
     Check -Name "not_reassessed lists the absent id and the untested id" -Test { $nr -eq 'broker:example-lookup,paste:example-paste' } -Shown $nr
-    Check -Name "absent-not-removed: an open id missing from current is not removed" -Test { (Ids $r.Diff 'removed') -notmatch 'broker:example-lookup' } -Shown (Ids $r.Diff 'removed')
-    $sc = @($r.Diff.severity_changed) | Where-Object { $null -ne $_ }
+    Check -Name "absent-not-removed: an open id missing from current is not removed" -Test { $r.Wrote -and (Ids $r.Diff 'removed') -notmatch 'broker:example-lookup' } -Shown (Ids $r.Diff 'removed')
+    $sc = @(@($r.Diff.severity_changed) | Where-Object { $null -ne $_ })
     Check -Name "severity_changed carries id, from and to" -Test { $sc.Count -eq 1 -and $sc[0].id -eq 'broker:example-search' -and $sc[0].from -eq 'nudge' -and $sc[0].to -eq 'page' } -Shown (($sc | ForEach-Object { "$($_.id) $($_.from)->$($_.to)" }) -join ';')
     Check -Name "the diff names both run dates" -Test { $r.Diff.baseline_run_date -eq '2026-10-11' -and $r.Diff.current_run_date -eq '2026-10-18' } -Shown "$($r.Diff.baseline_run_date) $($r.Diff.current_run_date)"
 
@@ -204,14 +204,16 @@ try {
     } -Shown ''
 
     $srcText = (@($script:Compare, $script:Functions) | Where-Object { Test-Path -LiteralPath $_ } | ForEach-Object { [IO.File]::ReadAllText($_) }) -join "`n"
-    Check -Name "neither script calls Test-Json (absent on Windows PowerShell 5.1)" -Test { $srcText.Length -gt 0 -and $srcText -notmatch '(?im)^[^#]*\bTest-Json\b' } -Shown ''
+    # Comments may say why Test-Json is not used; code may not call it.
+    $code = ($srcText -replace '(?s)<#.*?#>', '') -replace '(?m)#.*$', ''
+    Check -Name "neither script calls Test-Json (absent on Windows PowerShell 5.1)" -Test { $srcText.Length -gt 0 -and $code -notmatch '(?i)\bTest-Json\b' } -Shown ''
 
     # ---- SKILL.md Check A step 5 ------------------------------------------
     $skillText = [IO.File]::ReadAllText($script:Skill)
     $step5 = ([regex]::Match($skillText, '(?ms)^## Check A.*?^5\.\s(.*?)(?=^## )')).Groups[1].Value
     Check -Name "SKILL.md Check A step 5 names footprint-schema.json" -Test { $step5 -match 'references/footprint-schema\.json' } -Shown ''
     Check -Name "  ...and scripts/Compare-Footprint.ps1" -Test { $step5 -match 'scripts/Compare-Footprint\.ps1' } -Shown ''
-    Check -Name "  ...and says the id is category plus source, not the run date" -Test { $step5 -match 'broker:spokeo' -and $step5 -match '(?i)not .{0,40}run date' } -Shown ''
+    Check -Name "  ...and says the id is category plus source, not the run date" -Test { $step5 -match 'broker:spokeo' -and $step5 -match '(?i)(not|never) .{0,40}run date' } -Shown ''
 
     # ---- what git keeps out ------------------------------------------------
     $gitOk = [bool](Get-Command -Name git -CommandType Application -ErrorAction SilentlyContinue)
