@@ -50,19 +50,32 @@ function G {
     if ($LASTEXITCODE -ne 0) { throw "git $($args -join ' ') exited $LASTEXITCODE" }
 }
 
+# Builds the repository and returns its path. The caller's location is the
+# same afterwards, whether the build succeeds or a step throws: the Pop-Location
+# is in a finally, so a failed git call cannot strand the shell in the temp
+# repo (TheHub #61004). Callers that work inside it use InRepo.
 function MakeRepo([string]$Name) {
     $p = Join-Path $tmp $Name
     New-Item -ItemType Directory -Path $p | Out-Null
     Push-Location $p
-    G init -q
-    New-Item -ItemType Directory -Path src, other | Out-Null
-    Set-Content README.md 'doc'
-    Set-Content src/a.ps1 'Write-Output 1'
-    Set-Content src/b.ps1 'Write-Output 1'
-    Set-Content other/c.ps1 'Write-Output 1'
-    G add -A
-    G commit -q -m initial
+    try {
+        G init -q
+        New-Item -ItemType Directory -Path src, other | Out-Null
+        Set-Content README.md 'doc'
+        Set-Content src/a.ps1 'Write-Output 1'
+        Set-Content src/b.ps1 'Write-Output 1'
+        Set-Content other/c.ps1 'Write-Output 1'
+        G add -A
+        G commit -q -m initial
+    } finally { Pop-Location }
     return $p
+}
+
+# Runs $Body with the repository as the current location, and restores the
+# caller's location however $Body ends.
+function InRepo([string]$Path, [scriptblock]$Body) {
+    Push-Location $Path
+    try { . $Body } finally { Pop-Location }
 }
 
 function Edit-Commit([string]$File, [string]$Body) {
@@ -99,38 +112,36 @@ try {
     Write-Host ""
     Write-Host "drift and no drift"
 
-    MakeRepo -Name 'r1' | Out-Null
-    $o = Invoke-Drift @{ Doc = 'README.md'; Paths = 'src' }
-    Check -Name "doc is the newest change -> likely current" -Test { $o -match 'likely current' -and $o -notmatch 'src/' } -Shown ''
+    $repo1 = MakeRepo -Name 'r1'
+    InRepo $repo1 {
+        $o = Invoke-Drift @{ Doc = 'README.md'; Paths = 'src' }
+        Check -Name "doc is the newest change -> likely current" -Test { $o -match 'likely current' -and $o -notmatch 'src/' } -Shown ''
 
-    Edit-Commit 'src/a.ps1' 'Write-Output 2'
-    Edit-Commit 'src/b.ps1' 'Write-Output 2'
-    $o = Invoke-Drift @{ Doc = 'README.md'; Paths = 'src' }
-    Check -Name "a file changed two commits ago is still listed" -Test { $o -match 'src/a\.ps1' } -Shown ''
-    Check -Name "the latest change is listed" -Test { $o -match 'src/b\.ps1' } -Shown ''
-    Check -Name "the count covers both" -Test { $o -match 'updated \(2\)' } -Shown (($o -split "`n" | Select-String 'updated \(') -join '')
-    Check -Name "drift does not also say current" -Test { $o -notmatch 'likely current' } -Shown ''
+        Edit-Commit 'src/a.ps1' 'Write-Output 2'
+        Edit-Commit 'src/b.ps1' 'Write-Output 2'
+        $o = Invoke-Drift @{ Doc = 'README.md'; Paths = 'src' }
+        Check -Name "a file changed two commits ago is still listed" -Test { $o -match 'src/a\.ps1' } -Shown ''
+        Check -Name "the latest change is listed" -Test { $o -match 'src/b\.ps1' } -Shown ''
+        Check -Name "the count covers both" -Test { $o -match 'updated \(2\)' } -Shown (($o -split "`n" | Select-String 'updated \(') -join '')
+        Check -Name "drift does not also say current" -Test { $o -notmatch 'likely current' } -Shown ''
 
-    Edit-Commit 'other/c.ps1' 'Write-Output 2'
-    $o = Invoke-Drift @{ Doc = 'README.md'; Paths = 'src' }
-    Check -Name "a change outside -Paths is not drift" -Test { $o -notmatch 'other/c\.ps1' } -Shown ''
-    $o = Invoke-Drift @{ Doc = 'README.md'; Paths = @('src', 'other') }
-    Check -Name "every -Paths entry is checked" -Test { $o -match 'other/c\.ps1' -and $o -match 'src/a\.ps1' } -Shown ''
+        Edit-Commit 'other/c.ps1' 'Write-Output 2'
+        $o = Invoke-Drift @{ Doc = 'README.md'; Paths = 'src' }
+        Check -Name "a change outside -Paths is not drift" -Test { $o -notmatch 'other/c\.ps1' } -Shown ''
+        $o = Invoke-Drift @{ Doc = 'README.md'; Paths = @('src', 'other') }
+        Check -Name "every -Paths entry is checked" -Test { $o -match 'other/c\.ps1' -and $o -match 'src/a\.ps1' } -Shown ''
 
-    Edit-Commit 'README.md' 'doc, updated'
-    $o = Invoke-Drift @{ Doc = 'README.md'; Paths = @('src', 'other') }
-    Check -Name "updating the doc clears the drift" -Test { $o -match 'likely current' -and $o -notmatch 'src/a\.ps1' } -Shown ''
-    $repo1 = (Get-Location).Path
-    Pop-Location
+        Edit-Commit 'README.md' 'doc, updated'
+        $o = Invoke-Drift @{ Doc = 'README.md'; Paths = @('src', 'other') }
+        Check -Name "updating the doc clears the drift" -Test { $o -match 'likely current' -and $o -notmatch 'src/a\.ps1' } -Shown ''
+    }
 
     Write-Host ""
     Write-Host "-Repo"
 
     Push-Location $tmp
     try {
-        Push-Location $repo1
-        Edit-Commit 'src/a.ps1' 'Write-Output 3'
-        Pop-Location
+        InRepo $repo1 { Edit-Commit 'src/a.ps1' 'Write-Output 3' }
         $o = Invoke-Drift @{ Doc = 'README.md'; Paths = 'src'; Repo = $repo1 }
         Check -Name "-Repo answers about that repository, not the cwd" -Test { $o -match 'src/a\.ps1' } -Shown ''
         Check -Name "the caller's directory is restored" -Test { (Get-Location).Path -eq $tmp } -Shown (Get-Location).Path
@@ -161,13 +172,13 @@ try {
     Write-Host ""
     Write-Host "an uncommitted doc"
 
-    MakeRepo -Name 'r2' | Out-Null
-    Edit-Commit 'src/a.ps1' 'Write-Output 2'
-    Set-Content NEW.md 'new doc, never committed'
-    $o = Invoke-Drift @{ Doc = 'NEW.md'; Paths = 'src' }
-    Check -Name "warned as having no history" -Test { $o -match 'No commit history for NEW\.md' } -Shown ''
-    Check -Name "compared from the root commit" -Test { $o -match 'src/a\.ps1' -and $o -notmatch 'src/b\.ps1' } -Shown ''
-    Pop-Location
+    InRepo (MakeRepo -Name 'r2') {
+        Edit-Commit 'src/a.ps1' 'Write-Output 2'
+        Set-Content NEW.md 'new doc, never committed'
+        $o = Invoke-Drift @{ Doc = 'NEW.md'; Paths = 'src' }
+        Check -Name "warned as having no history" -Test { $o -match 'No commit history for NEW\.md' } -Shown ''
+        Check -Name "compared from the root commit" -Test { $o -match 'src/a\.ps1' -and $o -notmatch 'src/b\.ps1' } -Shown ''
+    }
 }
 finally {
     Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue
