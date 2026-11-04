@@ -9,7 +9,7 @@ Web search can't authoritatively answer "is *this* email in a breach." Only a br
 
 ## Have I Been Pwned (primary)
 - Get an API key: **haveibeenpwned.com/API/Key** (~$4/mo; email-search requires the key).
-- The script queries `breachedaccount` (which breaches) + `pasteaccount` (paste-site appearances) for each email, with rate-limit backoff.
+- The script queries `breachedaccount` (which breaches) + `pasteaccount` (paste-site appearances) for each email, with rate-limit backoff: a 429 waits the `Retry-After` HIBP sends (at least 2s, capped by `-MaxRetryAfterSec`, default 60), and after `-MaxRetries` retries (default 5) the run stops with `HibpRateLimitExceeded` and writes nothing, rather than looping or recording the address as clean.
 - **Never commit the key.** Pass `-ApiKey` at runtime or set `$env:HIBP_API_KEY`. It's not stored in the repo or the ledger.
 - Run:
   ```

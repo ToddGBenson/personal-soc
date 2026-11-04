@@ -15,7 +15,8 @@
       - a 404 is the only answer that reads as clean; a 500 aborts the run
         rather than being written down as "no breaches"
       - a missing key and a 401 stop the run
-      - a 429 is retried, never skipped
+      - a 429 is retried, never skipped; Retry-After is honoured (capped)
+        and a persistent 429 stops with HibpRateLimitExceeded (TheHub #61002)
       - the request: the escaped address, truncateResponse=false on
         breachedaccount only, the hibp-api-key and user-agent headers
       - the rate-limit delay after every request
@@ -28,6 +29,11 @@
 
 .NOTES
     Usage: pwsh -NoProfile -File skills/personal-threat-monitor/tests/Test-BreachCheck.ps1
+           powershell -NoProfile -File skills/personal-threat-monitor/tests/Test-BreachCheck.ps1
+    Runs on PowerShell 7 and Windows PowerShell 5.1. The two throw different
+    errors from Invoke-RestMethod (see HibpError), and the fake throws the
+    host's own shape. The rate-limit cases run in every shape the host can
+    build, so PowerShell 7 exercises both.
     ASCII only.
 #>
 
@@ -53,10 +59,35 @@ $FakeHibpSleeps = [System.Collections.Generic.List[int]]::new()
 $FakeHibpReplies = @{}
 $FakeHibpRetryAfter = ''
 
+# The error Invoke-RestMethod throws differs by host:
+#   ps7  - HttpResponseException; .Response is an HttpResponseMessage, whose
+#          Headers have no string indexer (Retry-After is Headers.RetryAfter)
+#   ps51 - WebException; .Response is an HttpWebResponse, whose Headers are a
+#          WebHeaderCollection read as Headers['Retry-After']
+# HttpWebResponse has no public constructor, so ps51 uses a WebResponse
+# subclass with the same two members the script reads.
+Add-Type -IgnoreWarnings -TypeDefinition @'
+public class FakeHibpWebResponse : System.Net.WebResponse {
+    private readonly System.Net.WebHeaderCollection headers = new System.Net.WebHeaderCollection();
+    public System.Net.HttpStatusCode StatusCode { get; set; }
+    public override System.Net.WebHeaderCollection Headers { get { return headers; } }
+}
+'@
+$FakeHibpShapes = if ($PSVersionTable.PSVersion.Major -ge 6) { @('ps7', 'ps51') } else { @('ps51') }
+$FakeHibpShape = $FakeHibpShapes[0]
+
 function HibpError([int]$Status, [string]$RetryAfter) {
-    $msg = [System.Net.Http.HttpResponseMessage]::new([System.Net.HttpStatusCode]$Status)
-    if ($RetryAfter) { $msg.Headers.Add('Retry-After', $RetryAfter) }
-    return [Microsoft.PowerShell.Commands.HttpResponseException]::new("HTTP $Status", $msg)
+    if ($FakeHibpShape -eq 'ps7') {
+        $msg = [System.Net.Http.HttpResponseMessage]::new([System.Net.HttpStatusCode]$Status)
+        if ($RetryAfter) { $msg.Headers.TryAddWithoutValidation('Retry-After', $RetryAfter) | Out-Null }
+        return [Microsoft.PowerShell.Commands.HttpResponseException]::new("HTTP $Status", $msg)
+    }
+    $resp = [FakeHibpWebResponse]::new()
+    # .NET Framework has no named HttpStatusCode for 429 and PowerShell 5.1
+    # refuses the cast, so the value is set without one.
+    $resp.StatusCode = [Enum]::ToObject([System.Net.HttpStatusCode], $Status)
+    if ($RetryAfter) { $resp.Headers.Add('Retry-After', $RetryAfter) }
+    return [System.Net.WebException]::new("HTTP $Status", $null, [System.Net.WebExceptionStatus]::ProtocolError, $resp)
 }
 
 # Installed with Set-Item rather than declared, as Test-ExposureVerdict does:
@@ -65,6 +96,9 @@ function HibpError([int]$Status, [string]$RetryAfter) {
 Set-Item -Path function:Invoke-RestMethod -Value {
     param([string]$Uri, [hashtable]$Headers, [int]$TimeoutSec)
     $FakeHibpCalls.Add([pscustomobject]@{ Uri = $Uri; Headers = $Headers; TimeoutSec = $TimeoutSec })
+    # A retry loop with no ceiling would spin here forever (Start-Sleep is
+    # faked); stop it so the run reports a failure instead of hanging.
+    if ($FakeHibpCalls.Count -gt 50) { throw "fake HIBP: runaway retry loop, more than 50 requests" }
     $prefix = 'https://haveibeenpwned.com/api/v3/'
     if (-not $Uri.StartsWith($prefix)) { throw "fake HIBP: unexpected URL $Uri" }
     $key = ($Uri.Substring($prefix.Length) -split '\?')[0]
@@ -89,6 +123,7 @@ function Reply([string]$Kind, [string]$Email, [object[]]$Replies) {
 function ClearFake {
     $FakeHibpCalls.Clear(); $FakeHibpSleeps.Clear(); $FakeHibpReplies.Clear()
     $script:FakeHibpRetryAfter = ''
+    $script:FakeHibpShape = $FakeHibpShapes[0]
 }
 
 function Breach([string]$Name, [string]$Date, [string[]]$Classes) {
@@ -107,7 +142,9 @@ function Invoke-Under([string[]]$Emails, [hashtable]$Extra = @{}) {
         $r.Threw = $true; $r.Error = $_.Exception.Message
     }
     $json = Join-Path -Path $out -ChildPath 'breaches.json'
-    if (Test-Path -LiteralPath $json) { $r.Report = @(Get-Content -LiteralPath $json -Raw | ConvertFrom-Json) }
+    # ForEach-Object unrolls the array: on 5.1 ConvertFrom-Json emits a
+    # top-level array as one object.
+    if (Test-Path -LiteralPath $json) { $r.Report = @(Get-Content -LiteralPath $json -Raw | ConvertFrom-Json | ForEach-Object { $_ }) }
     return $r
 }
 
@@ -211,16 +248,70 @@ try {
     $backoff = if ($FakeHibpSleeps.Count) { $FakeHibpSleeps[0] } else { 0 }
     Check -Name "429 backs off at least 2s before retrying" -Test { $backoff -ge 2000 } -Shown "${backoff}ms"
 
-    # Reported, not gated. The script reads Retry-After with
-    # Headers['retry-after'], but on PowerShell 7 Response is an
-    # HttpResponseMessage whose headers have no string indexer: the read is
-    # $null, [int]$null is 0, and the 2s floor wins. A server asking for 7s
-    # gets 2s. Pinned as a note so the day it is fixed is visible.
-    if ($backoff -ge 7000) {
-        Write-Host "  (Retry-After is now honoured: ${backoff}ms for 7s)"
-    } else {
-        Write-Host "  NOTE  Retry-After: 7 was not honoured (backed off ${backoff}ms). On"
-        Write-Host "        PowerShell 7 Headers['retry-after'] reads `$null; see the comment."
+    # ------------------------------------------------------------------------
+    # TheHub #61002. Before it, Retry-After was read as Headers['retry-after'],
+    # which is $null on PowerShell 7, so a server asking for 7s got the 2s
+    # floor; and a 429 that never cleared was retried forever.
+    foreach ($shape in $FakeHibpShapes) {
+        Write-Host ""
+        Write-Host "rate limiting ($shape)"
+
+        # Each case: the Retry-After the fake sends, then the wait expected
+        # before the retry. The first sleep is the backoff; -DelayMs follows.
+        $cases = @(
+            @{ Name = 'Retry-After: 7 waits 7s';                         After = '7';    Want = 7000 },
+            @{ Name = 'Retry-After: 600 is capped at -MaxRetryAfterSec'; After = '600';  Want = 60000 },
+            @{ Name = 'Retry-After: 1 keeps the 2s floor';               After = '1';    Want = 2000 },
+            @{ Name = 'no Retry-After waits the 2s default';             After = '';     Want = 2000 },
+            @{ Name = 'an unparseable Retry-After waits 2s';             After = 'soon'; Want = 2000 }
+        )
+        foreach ($c in $cases) {
+            ClearFake
+            $FakeHibpShape = $shape
+            $FakeHibpRetryAfter = $c.After
+            Reply -Kind 'breachedaccount' -Email 'a@example.com' -Replies @(429, 404)
+            Reply -Kind 'pasteaccount' -Email 'a@example.com' -Replies @(404)
+            $r = Invoke-Under -Emails 'a@example.com' -Extra $key
+            $first = if ($FakeHibpSleeps.Count) { $FakeHibpSleeps[0] } else { 0 }
+            Check -Name $c.Name -Test { -not $r.Threw -and $first -eq $c.Want } -Shown "${first}ms $($r.Error)"
+        }
+
+        ClearFake
+        $FakeHibpShape = $shape
+        $FakeHibpRetryAfter = '600'
+        Reply -Kind 'breachedaccount' -Email 'a@example.com' -Replies @(429, 404)
+        Reply -Kind 'pasteaccount' -Email 'a@example.com' -Replies @(404)
+        $r = Invoke-Under -Emails 'a@example.com' -Extra ($key + @{ MaxRetryAfterSec = 30 })
+        $first = if ($FakeHibpSleeps.Count) { $FakeHibpSleeps[0] } else { 0 }
+        Check -Name "-MaxRetryAfterSec sets the cap" -Test { -not $r.Threw -and $first -eq 30000 } -Shown "${first}ms $($r.Error)"
+
+        ClearFake
+        $FakeHibpShape = $shape
+        $FakeHibpRetryAfter = '3'
+        Reply -Kind 'breachedaccount' -Email 'a@example.com' -Replies @(429)
+        Reply -Kind 'pasteaccount' -Email 'a@example.com' -Replies @(404)
+        $r = Invoke-Under -Emails 'a@example.com' -Extra $key
+        $bcalls = @($FakeHibpCalls | Where-Object { $_.Uri -like '*/breachedaccount/*' }).Count
+        Check -Name "a persistent 429 stops after 5 retries (the default)" -Test { $r.Threw -and $bcalls -eq 6 } -Shown "$bcalls call(s)"
+        Check -Name "  with the named error HibpRateLimitExceeded" -Test { $r.Error -like 'HibpRateLimitExceeded*' } -Shown $r.Error
+        Check -Name "  and nothing is written down as clean" -Test { -not $r.Report } -Shown ''
+        Check -Name "  every retry waited the Retry-After" -Test { ($FakeHibpSleeps -join ',') -eq '3000,3000,3000,3000,3000' } -Shown ($FakeHibpSleeps -join ',')
+
+        ClearFake
+        $FakeHibpShape = $shape
+        Reply -Kind 'breachedaccount' -Email 'a@example.com' -Replies @(429)
+        Reply -Kind 'pasteaccount' -Email 'a@example.com' -Replies @(404)
+        $r = Invoke-Under -Emails 'a@example.com' -Extra ($key + @{ MaxRetries = 2 })
+        $bcalls = @($FakeHibpCalls | Where-Object { $_.Uri -like '*/breachedaccount/*' }).Count
+        Check -Name "-MaxRetries 2 makes three attempts, then stops" -Test { $r.Threw -and $bcalls -eq 3 -and $r.Error -like 'HibpRateLimitExceeded*' } -Shown "$bcalls call(s)"
+
+        ClearFake
+        $FakeHibpShape = $shape
+        Reply -Kind 'breachedaccount' -Email 'a@example.com' -Replies @(429)
+        Reply -Kind 'pasteaccount' -Email 'a@example.com' -Replies @(404)
+        $r = Invoke-Under -Emails 'a@example.com' -Extra ($key + @{ MaxRetries = 0 })
+        $bcalls = @($FakeHibpCalls | Where-Object { $_.Uri -like '*/breachedaccount/*' }).Count
+        Check -Name "-MaxRetries 0 never retries" -Test { $r.Threw -and $bcalls -eq 1 -and $r.Error -like 'HibpRateLimitExceeded*' } -Shown "$bcalls call(s)"
     }
 }
 finally {
