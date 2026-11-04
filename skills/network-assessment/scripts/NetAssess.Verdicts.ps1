@@ -410,6 +410,71 @@ function Get-ExposureVerdict {
     }
 }
 
+function Get-WanPortsVerdict {
+    <#
+    .SYNOPSIS
+        The value of network-status.md's WAN line, from external-exposure.json.
+
+    .DESCRIPTION
+        TheHub #60987: the WAN line read 'n/a' when external-exposure.json was
+        missing and when it would not parse, and netassess-ingest fails only
+        on 'unknown'. So every weekly run from 2026-08-24 to 2026-10-19 passed
+        a WAN check that never answered. A check that did not answer now says
+        'unknown', the word the gate fails on; a definite answer keeps the
+        wording the line has always had.
+
+          missing file             unknown (no external-exposure.json; see raw/external-run.txt)
+          empty / not JSON         unknown (external-exposure.json unreadable: <why>)
+          no ports field           unknown (external-exposure.json has no ports list)
+          ports: [] or null        none visible (ConvertTo-Json can write an
+                                   empty list as null; mykronos reads it so too)
+          ports: [443, 7547]       443, 7547   + ' (NOT allowlisted: 7547)' when
+                                               unexpected_ports is non-empty
+
+        Get-ExternalExposure.ps1 writes the file, including on an InternetDB
+        404 (ports: [], indexed: false), so a clean edge is 'none visible',
+        not unknown.
+
+    .PARAMETER ExposureJsonPath
+        Path to the run's external-exposure.json.
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param([Parameter(Mandatory)][string]$ExposureJsonPath)
+
+    if (-not (Test-Path -LiteralPath $ExposureJsonPath -PathType Leaf)) {
+        return 'unknown (no external-exposure.json; see raw/external-run.txt)'
+    }
+    try {
+        $raw = Get-Content -LiteralPath $ExposureJsonPath -Raw -ErrorAction Stop
+        if ($null -eq $raw -or -not "$raw".Trim()) { throw 'the file is empty' }
+        $ext = $raw | ConvertFrom-Json -ErrorAction Stop
+        if ($null -eq $ext) { throw 'the file parsed to nothing' }
+    } catch {
+        # Windows PowerShell 5.1 appends "(<offset>): <the JSON>" to the parse
+        # error, and the file holds the household's public IP; this line is
+        # uploaded. Keep the reason, drop the quoted content.
+        $why = "$($_.Exception.Message -split "`r?`n" | Where-Object { $_.Trim() } | Select-Object -First 1)"
+        $why = ($why -replace '\s*\(\d+\):.*$', '') -replace '\b\d{1,3}(\.\d{1,3}){3}\b', '<ip>'
+        $why = $why.Trim()
+        if ($why.Length -gt 100) { $why = $why.Substring(0, 100) + '...' }
+        return "unknown (external-exposure.json unreadable: $why)"
+    }
+
+    $names = @($ext.PSObject.Properties | ForEach-Object { $_.Name })
+    if ($names -notcontains 'ports') {
+        return 'unknown (external-exposure.json has no ports list)'
+    }
+
+    $ports = @($ext.ports | Where-Object { $null -ne $_ })
+    if (-not $ports.Count) { return 'none visible' }
+
+    $value = $ports -join ', '
+    $unexpected = @($ext.unexpected_ports | Where-Object { $null -ne $_ })
+    if ($unexpected.Count) { $value += " (NOT allowlisted: $($unexpected -join ', '))" }
+    return $value
+}
+
 # ---------------------------------------------------------------------------
 # NAS shares listed by `net view`  (TheHub #60852)
 #

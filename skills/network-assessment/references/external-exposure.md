@@ -15,6 +15,9 @@ Resolves your public IP (ipify/ifconfig.me), then queries **Shodan InternetDB** 
 ## The allowlist gate
 Every visible port is checked against `config/exposure-allowlist.yml`. A port not on it makes the script exit **1** (the weekly Concourse `external-exposure` job goes red and posts to the alert channel); a check that could not run - no public IP, InternetDB error, unreadable allowlist - exits **2**, never 0. A 404 or an empty port list exits 0. The file ships **empty**: 7547 stays an alert until the owner decides to accept it, and every entry should carry a `reason:`.
 
+## The weekly WAN line
+`Invoke-WeeklyNetworkScan.ps1` writes `- **WAN (external) ports visible:** ...` from `external-exposure.json` via `Get-WanPortsVerdict` (`scripts/NetAssess.Verdicts.ps1`). Every run writes that file, including a 404 (`indexed: false`, no ports), so a check that answered reads `none visible` or the port list, with ` (NOT allowlisted: ...)` appended for any port off the allowlist. A check that did not answer reads `unknown (...)`: no file (see `raw/external-run.txt`), a file that will not parse, or one with no `ports` field. netassess-ingest fails a run on `unknown`. This line used to say `n/a` in those cases, which the gate passed (TheHub #60987).
+
 ## Accuracy caveats
 - InternetDB reflects Shodan's **last scan**, not a live probe — it can be stale or miss a just-opened port.
 - Residential IPs **rotate** (DHCP), so re-check; a finding may belong to a prior lease.
