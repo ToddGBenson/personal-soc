@@ -23,6 +23,8 @@
       - report only: drift exits 0; no repository, or no doc, exits non-zero
         (an unanswered check is not a clean one)
       - an uncommitted doc is warned about and compared from the root commit
+      - a step that throws inside MakeRepo leaves the caller's location as it
+        was (TheHub #61004)
 
 .NOTES
     Usage: pwsh -NoProfile -File skills/update-docs/tests/Test-DocDrift.ps1
@@ -81,6 +83,19 @@ function Get-DriftExitCode([string[]]$Arguments) {
 }
 
 try {
+    Write-Host ""
+    Write-Host "the fixture"
+
+    # TheHub #61004. MakeRepo changes directory into the repository it builds;
+    # a step that throws part-way must not leave the caller's shell in the temp
+    # repo (which the finally below then deletes). G is shadowed in a child
+    # scope, so MakeRepo's own git call is the step that fails.
+    $here = (Get-Location).Path
+    $msg = ''
+    try { & { function G { throw 'forced git failure' }; MakeRepo -Name 'r-fail' } | Out-Null } catch { $msg = $_.Exception.Message }
+    Check -Name "a step that throws inside MakeRepo is not swallowed" -Test { $msg -eq 'forced git failure' } -Shown $msg
+    Check -Name "and the caller's location is unchanged" -Test { (Get-Location).Path -eq $here } -Shown (Get-Location).Path
+
     Write-Host ""
     Write-Host "drift and no drift"
 
