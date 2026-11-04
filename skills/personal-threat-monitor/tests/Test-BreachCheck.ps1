@@ -83,7 +83,9 @@ function HibpError([int]$Status, [string]$RetryAfter) {
         return [Microsoft.PowerShell.Commands.HttpResponseException]::new("HTTP $Status", $msg)
     }
     $resp = [FakeHibpWebResponse]::new()
-    $resp.StatusCode = [System.Net.HttpStatusCode]$Status
+    # .NET Framework has no named HttpStatusCode for 429 and PowerShell 5.1
+    # refuses the cast, so the value is set without one.
+    $resp.StatusCode = [Enum]::ToObject([System.Net.HttpStatusCode], $Status)
     if ($RetryAfter) { $resp.Headers.Add('Retry-After', $RetryAfter) }
     return [System.Net.WebException]::new("HTTP $Status", $null, [System.Net.WebExceptionStatus]::ProtocolError, $resp)
 }
@@ -140,7 +142,9 @@ function Invoke-Under([string[]]$Emails, [hashtable]$Extra = @{}) {
         $r.Threw = $true; $r.Error = $_.Exception.Message
     }
     $json = Join-Path -Path $out -ChildPath 'breaches.json'
-    if (Test-Path -LiteralPath $json) { $r.Report = @(Get-Content -LiteralPath $json -Raw | ConvertFrom-Json) }
+    # ForEach-Object unrolls the array: on 5.1 ConvertFrom-Json emits a
+    # top-level array as one object.
+    if (Test-Path -LiteralPath $json) { $r.Report = @(Get-Content -LiteralPath $json -Raw | ConvertFrom-Json | ForEach-Object { $_ }) }
     return $r
 }
 
