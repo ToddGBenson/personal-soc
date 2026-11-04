@@ -69,14 +69,24 @@ try {
     $v = Verdict (Fixture 'noports.json' '{"ip": "192.0.2.10", "cves": [], "unexpected_ports": []}')
     Check -Name "ports field absent is unknown, not 'none visible'" -Test { $v -like 'unknown*' } -Shown $v
 
-    $v = Verdict (Fixture 'nullports.json' '{"ip": "192.0.2.10", "ports": null, "unexpected_ports": []}')
-    Check -Name "ports null is unknown, not 'none visible'" -Test { $v -like 'unknown*' } -Shown $v
 
     Write-Host ""
     Write-Host "the check answered"
 
+    # ConvertTo-Json can write an empty port list as null; mykronos's
+    # network_exposure adapter reads it as an empty list too.
+    $v = Verdict (Fixture 'nullports.json' '{"ip": "192.0.2.10", "ports": null, "unexpected_ports": null}')
+    Check -Name "ports null (an empty list serialised) is 'none visible'" -Test { $v -eq 'none visible' } -Shown $v
+
     $v = Verdict (Fixture 'none.json' '{"ip": "192.0.2.10", "ports": [], "unexpected_ports": [], "allowlisted_ports": []}')
     Check -Name "empty ports is 'none visible'" -Test { $v -eq 'none visible' } -Shown $v
+
+    # The shape Get-ExternalExposure.ps1 writes on an InternetDB 404, serialised
+    # by whichever PowerShell runs this (5.1 and 7 print an empty array
+    # differently).
+    $notIndexed = [pscustomobject]@{ ip = '192.0.2.10'; ports = @(); unexpected_ports = @(); internetdb = 'not indexed (HTTP 404)' } | ConvertTo-Json -Depth 5
+    $v = Verdict (Fixture 'notindexed.json' $notIndexed)
+    Check -Name "InternetDB 404 (ports: @()) is 'none visible'" -Test { $v -eq 'none visible' } -Shown $v
 
     $v = Verdict (Fixture 'allowed.json' '{"ip": "192.0.2.10", "ports": [443, 8443], "unexpected_ports": [], "allowlisted_ports": [443, 8443]}')
     Check -Name "all allowlisted is the bare comma-joined list" -Test { $v -eq '443, 8443' } -Shown $v
@@ -93,7 +103,7 @@ try {
     Write-Host ""
     Write-Host "no answer reads as a pass"
 
-    foreach ($n in 'absent.json', 'garbled.json', 'empty.json', 'noports.json', 'nullports.json') {
+    foreach ($n in 'absent.json', 'garbled.json', 'empty.json', 'noports.json') {
         $v = Verdict (Join-Path $dir $n)
         Check -Name "$n never reads 'n/a'" -Test { $v -notmatch 'n/a' -and $v -like 'unknown*' } -Shown $v
     }
