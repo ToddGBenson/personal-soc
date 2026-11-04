@@ -120,15 +120,26 @@ if(Test-Path "$out\external-exposure.json"){
   }
 }
 
+# findings.json + posture score (TheHub #60989). Compare-Assessment.ps1 needs
+# findings.json, and until now only a full engagement wrote one, so the score
+# and the finding-level diff never ran on schedule. Every run now writes the
+# five checks above under stable ids ('unknown' / 'n/a' -> untested, never
+# resolved), compares them with the newest earlier WEEKLY findings.json (a
+# full engagement's is never the baseline), and adds one line below. The six
+# lines above it keep their wording: netassess-ingest matches substrings of
+# them. Fixtures: tests/Test-WeeklyFindings.ps1.
+$findings = @(ConvertTo-WeeklyFindings -NfsVerdict $nfsOpen -SmbVerdict $smbv1 -SharesVerdict $anon `
+                -OpenApVerdict $openAP -WanVerdict $extPorts)
+$posture = Write-WeeklyFindings -Findings $findings -OutDir $out -Root $Root -Today $today `
+             -ComparePath (Join-Path $PSScriptRoot 'Compare-Assessment.ps1')
+$bullets = (Format-NetworkStatusBullets -HostCount $curCount -HostDelta $hostDelta -NfsVerdict $nfsOpen `
+              -SmbVerdict $smbv1 -SharesVerdict $anon -OpenApVerdict $openAP -WanVerdict $extPorts `
+              -PostureLine $posture.Line) -join "`r`n"
+
 @"
 ## Network status — $today (local scheduled scan)
 
-- **Hosts:** $curCount live ($hostDelta)
-- **NAS NFS exports:** $nfsOpen
-- **NAS SMB:** $smbv1
-- **NAS anonymous shares listed:** $anon
-- **Open Wi-Fi AP:** $openAP
-- **WAN (external) ports visible:** $extPorts
+$bullets
 
 _Raw data + inventory.csv in $out. Full CIS findings + digest: run the network-assessment skill or fold into the weekly digest._
 "@ | Set-Content "$out\network-status.md"

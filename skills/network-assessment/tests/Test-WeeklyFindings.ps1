@@ -68,7 +68,7 @@ function Get-Status([string]$Id, [hashtable]$Override) {
     return $f.status
 }
 
-function New-RunFolder([string]$Name, $Findings) {
+function Add-RunFolder([string]$Name, $Findings) {
     $d = New-Item -ItemType Directory -Force -Path (Join-Path $root $Name)
     if ($null -ne $Findings) {
         ConvertTo-Json -InputObject @($Findings) | Set-Content (Join-Path $d.FullName 'findings.json')
@@ -151,71 +151,74 @@ try {
     $mixed = @($weeklyClean) + @(@{ id = 'flat-network'; title = 'Flat network'; severity = 'high'; cis = '06'; status = 'open' })
 
     $r1 = Join-Path $root 'r1'
-    New-RunFolder 'r1/2026-08-10' $engagement | Out-Null
-    New-RunFolder 'r1/2026-10-19' $weeklyClean | Out-Null
-    New-RunFolder 'r1/2026-10-26' $mixed | Out-Null           # newest with a file, but not weekly-only
-    New-RunFolder 'r1/2026-11-02' $null | Out-Null            # no findings.json at all
-    New-RunFolder 'r1/2026-11-09' $weeklyClean | Out-Null     # today: never its own baseline
-    New-RunFolder 'r1/2026-11-16' $weeklyClean | Out-Null     # later: never a baseline
-    New-RunFolder 'r1/notes' $weeklyClean | Out-Null          # not a dated folder
+    Add-RunFolder 'r1/2026-08-10' $engagement | Out-Null
+    Add-RunFolder 'r1/2026-10-19' $weeklyClean | Out-Null
+    Add-RunFolder 'r1/2026-10-26' $mixed | Out-Null           # newest with a file, but not weekly-only
+    Add-RunFolder 'r1/2026-11-02' $null | Out-Null            # no findings.json at all
+    Add-RunFolder 'r1/2026-11-09' $weeklyClean | Out-Null     # today: never its own baseline
+    Add-RunFolder 'r1/2026-11-16' $weeklyClean | Out-Null     # later: never a baseline
+    Add-RunFolder 'r1/notes' $weeklyClean | Out-Null          # not a dated folder
     $bl = Get-WeeklyFindingsBaseline -Root $r1 -Today '2026-11-09'
     Check -What 'skips today, later, undated, no-file and mixed folders' -Got $bl.Name -Want '2026-10-19'
 
     $r2 = Join-Path $root 'r2'
-    New-RunFolder 'r2/2026-08-09' $engagement | Out-Null
-    New-RunFolder 'r2/2026-08-10' $engagement | Out-Null
+    Add-RunFolder 'r2/2026-08-09' $engagement | Out-Null
+    Add-RunFolder 'r2/2026-08-10' $engagement | Out-Null
     $bl = Get-WeeklyFindingsBaseline -Root $r2 -Today '2026-11-09'
     Check -What 'a full-engagement findings.json is never a baseline' -Got ($null -eq $bl) -Want $true
 
     $r3 = Join-Path $root 'r3'
-    New-RunFolder 'r3/2026-10-26' @() | Out-Null
-    Set-Content (Join-Path (New-RunFolder 'r3/2026-11-02' $null) 'findings.json') 'not json {'
+    Add-RunFolder 'r3/2026-10-26' @() | Out-Null
+    Set-Content (Join-Path (Add-RunFolder 'r3/2026-11-02' $null) 'findings.json') 'not json {'
     $bl = Get-WeeklyFindingsBaseline -Root $r3 -Today '2026-11-09'
     Check -What 'an empty or unreadable findings.json is not a baseline' -Got ($null -eq $bl) -Want $true
 
     Write-Host ""
     Write-Host "with a baseline: Compare-Assessment runs and the line carries the delta"
     $r4 = Join-Path $root 'r4'
-    New-RunFolder 'r4/2026-08-10' $engagement | Out-Null
-    New-RunFolder 'r4/2026-10-26' $weeklyClean | Out-Null
-    $out4 = New-RunFolder 'r4/2026-11-02' $null
+    Add-RunFolder 'r4/2026-08-10' $engagement | Out-Null
+    Add-RunFolder 'r4/2026-10-26' $weeklyClean | Out-Null
+    $out4 = Add-RunFolder 'r4/2026-11-02' $null
     $cur4 = @(ConvertTo-WeeklyFindings -NfsVerdict 'EXPORTS PRESENT (/shares/x)' -SmbVerdict 'SMB2/3 only' -SharesVerdict '0' -OpenApVerdict 'no open AP' -WanVerdict 'none visible')
     $p4 = Write-WeeklyFindings -Findings $cur4 -OutDir $out4 -Root $r4 -Today '2026-11-02' -ComparePath $cmp
     Check -What 'findings.json written'                 -Got (Test-Path (Join-Path $out4 'findings.json')) -Want $true
     Check -What 'findings.json holds the five ids'      -Got (@(Get-Content (Join-Path $out4 'findings.json') -Raw | ConvertFrom-Json | ForEach-Object { $_ }).id -join ',') -Want ($ids -join ',')
     Check -What 'change-summary.json written'           -Got (Test-Path (Join-Path $out4 'change-summary.json')) -Want $true
     $sum4 = Get-Content (Join-Path $out4 'change-summary.json') -Raw | ConvertFrom-Json
-    Check -What 'compare saw one new finding'           -Got $sum4.new -Want 1
+    # 'new' in Compare-Assessment means an id the baseline did not have; here
+    # every id is in both, and NFS went resolved -> open.
+    Check -What 'compare scored the week (current)'     -Got $sum4.score_current -Want 85
+    Check -What 'compare scored the week (delta)'       -Got $sum4.score_delta -Want -15
     Check -What 'posture line (critical NFS export new)' -Got $p4.Line -Want '- **Posture score:** 85/100 (Strong, -15 vs 2026-10-26)'
 
     # Baseline open, current untested: not re-assessed, carried, delta 0.
     $r5 = Join-Path $root 'r5'
-    New-RunFolder 'r5/2026-10-26' $cur4 | Out-Null
-    $out5 = New-RunFolder 'r5/2026-11-02' $null
+    Add-RunFolder 'r5/2026-10-26' $cur4 | Out-Null
+    $out5 = Add-RunFolder 'r5/2026-11-02' $null
     $p5 = Write-WeeklyFindings -Findings $unknownAll -OutDir $out5 -Root $r5 -Today '2026-11-02' -ComparePath $cmp
     Check -What 'untested carries the open baseline finding' -Got $p5.Line -Want '- **Posture score:** 85/100 (Strong, +0 vs 2026-10-26)'
     Check -What '...and the line never says unknown'        -Got ($p5.Line -match 'unknown') -Want $false
 
     # The fix comes in: resolved.
-    $out6 = New-RunFolder 'r5/2026-11-09' $null
+    $out6 = Add-RunFolder 'r5/2026-11-09' $null
     $p6 = Write-WeeklyFindings -Findings $weeklyClean -OutDir $out6 -Root $r5 -Today '2026-11-09' -ComparePath $cmp
     Check -What 'resolved against the untested week before' -Got $p6.Line -Want '- **Posture score:** 100/100 (Strong, +0 vs 2026-11-02)'
 
     Write-Host ""
     Write-Host "with no baseline: the line says so, and never says unknown"
-    $out7 = New-RunFolder 'r2/2026-11-09' $null
+    $out7 = Add-RunFolder 'r2/2026-11-09' $null
     $p7 = Write-WeeklyFindings -Findings $cur4 -OutDir $out7 -Root $r2 -Today '2026-11-09' -ComparePath $cmp
     Check -What 'no-baseline line (engagement folders skipped)' -Got $p7.Line -Want '- **Posture score:** 85/100 (Strong, no prior weekly findings.json)'
     Check -What 'findings.json still written'                  -Got (Test-Path (Join-Path $out7 'findings.json')) -Want $true
     Check -What 'no change-summary.json without a baseline'    -Got (Test-Path (Join-Path $out7 'change-summary.json')) -Want $false
     $r8 = Join-Path $root 'r8'
-    $out8 = New-RunFolder 'r8/2026-11-09' $null
+    $out8 = Add-RunFolder 'r8/2026-11-09' $null
     $p8 = Write-WeeklyFindings -Findings $unknownAll -OutDir $out8 -Root $r8 -Today '2026-11-09' -ComparePath $cmp
     Check -What 'all checks unknown, first run'                -Got $p8.Line -Want '- **Posture score:** 100/100 (Strong, no prior weekly findings.json)'
     Check -What '...still no unknown in the line'              -Got ($p8.Line -match 'unknown') -Want $false
     $worst = @(ConvertTo-WeeklyFindings -NfsVerdict 'EXPORTS PRESENT (/a)' -SmbVerdict 'SMBv1 ENABLED' -SharesVerdict '3 (a, b, c)' `
             -OpenApVerdict 'X (90% signal) OPEN - broadcasting' -WanVerdict '7547 (NOT allowlisted: 7547)')
-    $out9 = New-RunFolder 'r9/2026-11-09' $null
+    $out9 = Add-RunFolder 'r9/2026-11-09' $null
     $p9 = Write-WeeklyFindings -Findings $worst -OutDir $out9 -Root (Join-Path $root 'r9') -Today '2026-11-09' -ComparePath $cmp
     Check -What 'everything open: score agrees with Compare-Assessment' -Got $p9.Score -Want (& {
             & $cmp -Baseline $out9 -Current $out9 *> $null
