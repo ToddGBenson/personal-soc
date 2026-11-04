@@ -69,6 +69,12 @@ $FakeHibpBody = '[]'
 $FakeHibpThrow = $false
 
 Set-Item -Path function:Invoke-WebRequest -Value {
+    param(
+        [string]$Uri, [string]$Method, [string]$UserAgent, [int]$TimeoutSec,
+        [System.Collections.IDictionary]$Headers, [object]$Body, [string]$ContentType,
+        [switch]$UseBasicParsing,
+        [Parameter(ValueFromRemainingArguments = $true)][object[]]$Rest
+    )
     $bound = @{}
     foreach ($k in $PSBoundParameters.Keys) { $bound[$k] = $PSBoundParameters[$k] }
     $bound['_args'] = @($args)
@@ -290,7 +296,7 @@ try {
     if ($gitOk) {
         Push-Location -LiteralPath $script:SkillRoot
         try {
-            $ignored = & git check-ignore -q -- 'references/account-domains.local.txt' 2>$null; $ignoredExit = $LASTEXITCODE
+            & git check-ignore -q -- 'references/account-domains.local.txt' 2>$null; $ignoredExit = $LASTEXITCODE
             & git check-ignore -q -- 'references/account-domains.example.txt' 2>$null; $exampleExit = $LASTEXITCODE
         } finally { Pop-Location }
         Check -Name "git check-ignore ignores references/account-domains.local.txt" -Test { $ignoredExit -eq 0 } -Shown "exit $ignoredExit"
