@@ -2,6 +2,8 @@
 
 Closes the biggest accuracy gap in Check A: replaces "likely breached" (blast-radius inference) with a **confirmed, dated breach list** per email. Run via `scripts/Invoke-BreachCheck.ps1`.
 
+Without a key, `scripts/Get-NewBreaches.ps1` still gives a weekly signal: it matches HIBP's free public breach catalogue against the services you use (`references/account-domains.local.txt`) and flags a newly added breach of one of them. That is a reason to run this confirmation, not a substitute for it.
+
 ## Why it matters
 Web search can't authoritatively answer "is *this* email in a breach." Only a breach-index API can. Until then, findings like "an old email / your carrier likely exposed you" are **candidates** (see `verification.md`), not facts. This capability promotes them to confirmed — or clears them.
 
