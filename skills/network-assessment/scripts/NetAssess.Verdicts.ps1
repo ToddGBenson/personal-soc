@@ -468,3 +468,338 @@ function Get-NetViewShareVerdict {
     $status = if ($names.Count) { "$($names.Count) ($($names -join ', '))" } else { '0' }
     return [pscustomobject]@{ Count = $names.Count; Names = [string[]]$names.ToArray(); Status = $status }
 }
+
+# ---------------------------------------------------------------------------
+# The weekly scan's findings.json and posture score  (TheHub #60989)
+#
+# Compare-Assessment.ps1 (posture score 0-100; resolved / new / not
+# re-assessed) reads findings.json, and only a full manual engagement wrote
+# one. The weekly scan wrote network-status.md and inventory.csv, so neither
+# the score nor a finding-level diff ran on schedule after 2026-08-10. The
+# scan now writes the five checks it makes as findings under ids that never
+# change, compares them with the previous weekly run, and adds one line to
+# network-status.md.
+# ---------------------------------------------------------------------------
+
+# Severity and CIS control follow the full engagement's own findings for the
+# same weakness (netassess/2026-08-10), so the weekly score and an engagement
+# score weigh a finding alike. These weights decide the trend once the score
+# runs every week: change one and every later delta moves.
+$script:WeeklyFindingDefs = @(
+    @{ id = 'netassess.nas.nfs-exports';         title = 'NAS exports NFS shares';                 severity = 'critical'; cis = '03' },
+    @{ id = 'netassess.nas.smbv1';               title = 'NAS has SMBv1 enabled';                  severity = 'critical'; cis = '04' },
+    @{ id = 'netassess.nas.anon-shares';         title = 'NAS lists shares without credentials';   severity = 'high';     cis = '05' },
+    @{ id = 'netassess.wifi.open-ap';            title = 'Open Wi-Fi AP broadcasting in the home'; severity = 'critical'; cis = '04' },
+    @{ id = 'netassess.wan.unallowlisted-ports'; title = 'Public ports not on the allowlist';      severity = 'high';     cis = '12' }
+)
+
+function Get-WeeklyCheckStatus {
+    <#
+    .SYNOPSIS
+        open | resolved | untested for one check, from the verdict string the
+        scan prints for it.
+
+    .DESCRIPTION
+        'resolved' is returned only for a verdict this function recognises as
+        a definite negative. A check that did not answer ('unknown ...', the
+        WAN line's legacy 'n/a', an empty string) and any wording it does not
+        recognise are 'untested'. Compare-Assessment carries an untested
+        finding at its last known severity; a 'resolved' it had not earned
+        would raise the score for a NAS that was simply switched off.
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)][ValidateSet('nfs', 'smb', 'shares', 'wifi', 'wan')][string]$Check,
+        [AllowEmptyString()][string]$Verdict
+    )
+
+    $v = "$Verdict".Trim()
+    if (-not $v -or $v -like 'unknown*' -or $v -like 'n/a*') { return 'untested' }
+
+    switch ($Check) {
+        'nfs' {
+            if ($v -like 'EXPORTS PRESENT*') { return 'open' }
+            if ($v -match '^(no NFS service \(port 111 closed\)|service reachable, no exports|rpcbind reachable, no NFS service registered)') { return 'resolved' }
+        }
+        'smb' {
+            if ($v -eq 'SMBv1 ENABLED') { return 'open' }
+            if ($v -eq 'SMB2/3 only') { return 'resolved' }
+        }
+        'shares' {
+            # Get-NetViewShareVerdict: '0', or 'N (name, name)'. A bare count
+            # is the pre-#60852 wording.
+            if ($v -match '^0$') { return 'resolved' }
+            if ($v -match '^[1-9]\d*( \(.*\))?$') { return 'open' }
+        }
+        'wifi' {
+            # 'no open AP of ours (neighbouring, ...)' names neighbours, whose
+            # SSIDs could say anything, so the all-clear prefix is read first.
+            if ($v -match '^no open AP( of ours \(.*\))?$') { return 'resolved' }
+            if ($v -match ' OPEN - broadcasting') { return 'open' }
+        }
+        'wan' {
+            if ($v -match '\(NOT allowlisted: ') { return 'open' }
+            if ($v -eq 'none visible' -or $v -match '^\d+(, \d+)*$') { return 'resolved' }
+        }
+    }
+    return 'untested'
+}
+
+function ConvertTo-WeeklyFindings {
+    <#
+    .SYNOPSIS
+        The weekly scan's five checks as findings.json entries.
+
+    .DESCRIPTION
+        Always the same five ids, in the same order, whatever the verdicts
+        say - a check that did not answer is present with status 'untested',
+        never dropped, so Compare-Assessment reports it as not re-assessed
+        rather than resolved.
+
+    .OUTPUTS
+        {id, title, severity, cis, status} objects.
+    #>
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseSingularNouns', '', Justification = 'The name is the contract in TheHub #60989; it returns a list of findings.')]
+    [CmdletBinding()]
+    [OutputType([object[]])]
+    param(
+        [AllowEmptyString()][string]$NfsVerdict = '',
+        [AllowEmptyString()][string]$SmbVerdict = '',
+        [AllowEmptyString()][string]$SharesVerdict = '',
+        [AllowEmptyString()][string]$OpenApVerdict = '',
+        [AllowEmptyString()][string]$WanVerdict = ''
+    )
+
+    $verdicts = @(
+        @('nfs', $NfsVerdict), @('smb', $SmbVerdict), @('shares', $SharesVerdict),
+        @('wifi', $OpenApVerdict), @('wan', $WanVerdict)
+    )
+    $out = @()
+    for ($i = 0; $i -lt $script:WeeklyFindingDefs.Count; $i++) {
+        $d = $script:WeeklyFindingDefs[$i]
+        $out += [pscustomobject][ordered]@{
+            id       = $d.id
+            title    = $d.title
+            severity = $d.severity
+            cis      = $d.cis
+            status   = (Get-WeeklyCheckStatus -Check $verdicts[$i][0] -Verdict $verdicts[$i][1])
+        }
+    }
+    # Unrolled: callers collect with @(...).
+    return $out
+}
+
+function Get-WeeklyPostureScore {
+    <#
+    .SYNOPSIS
+        Compare-Assessment's score and band for one set of findings, for a
+        weekly run that has nothing to compare with.
+    .DESCRIPTION
+        The weights are Compare-Assessment.ps1's (critical 15, high 6,
+        medium 2, low 1, open findings only); tests/Test-WeeklyFindings.ps1
+        checks the two agree.
+    #>
+    [CmdletBinding()]
+    [OutputType([pscustomobject])]
+    param([object[]]$Findings)
+
+    $w = @{ critical = 15; high = 6; medium = 2; low = 1 }
+    $s = 100
+    foreach ($f in @($Findings)) { if ($f.status -eq 'open') { $s -= [int]$w["$($f.severity)".ToLower()] } }
+    $s = [Math]::Max(0, $s)
+    $band = if ($s -ge 85) { 'Strong' } elseif ($s -ge 70) { 'Good' } elseif ($s -ge 50) { 'Fair' } elseif ($s -ge 25) { 'Poor' } else { 'Critical' }
+    return [pscustomobject]@{ Score = $s; Band = $band }
+}
+
+function Get-WeeklyFindingsBaseline {
+    <#
+    .SYNOPSIS
+        The newest dated run folder before -Today whose findings.json is a
+        weekly one.
+
+    .DESCRIPTION
+        A weekly findings.json holds only ids starting 'netassess.'. A full
+        engagement's (2026-08-10: thirteen findings under ids such as
+        'nfs-export') is never a baseline: against it every weekly id reads as
+        new and the delta measures the change of format, not of the network.
+        Folders with no findings.json, an empty one, or one that does not
+        parse are skipped, and the search goes on to older folders.
+
+    .OUTPUTS
+        [IO.DirectoryInfo], or $null when there is none.
+    #>
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseSingularNouns', '', Justification = 'Finds the findings.json baseline.')]
+    [CmdletBinding()]
+    [OutputType([IO.DirectoryInfo])]
+    param(
+        [Parameter(Mandatory)][string]$Root,
+        [Parameter(Mandatory)][string]$Today
+    )
+
+    if (-not (Test-Path -LiteralPath $Root -PathType Container)) { return $null }
+    $dirs = @(Get-ChildItem -LiteralPath $Root -Directory |
+            Where-Object { $_.Name -match '^\d{4}-\d{2}-\d{2}' -and $_.Name.Substring(0, 10) -lt $Today } |
+            Sort-Object Name -Descending)
+    foreach ($d in $dirs) {
+        $p = Join-Path $d.FullName 'findings.json'
+        if (-not (Test-Path -LiteralPath $p -PathType Leaf)) { continue }
+        try {
+            $f = @(Get-Content -LiteralPath $p -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop | ForEach-Object { $_ })
+        } catch { continue }
+        if (-not $f.Count) { continue }
+        $other = @($f | Where-Object { -not ("$($_.id)".StartsWith('netassess.')) })
+        if ($other.Count) { continue }
+        return $d
+    }
+    return $null
+}
+
+function Write-WeeklyFindings {
+    <#
+    .SYNOPSIS
+        Write findings.json to the run folder, compare it with the previous
+        weekly run, and return network-status.md's posture-score value.
+
+    .DESCRIPTION
+        findings.json is written on every run. Each finding also carries
+        last_known_status and last_observed: the state the newest run that
+        answered saw, and that run's date. A finding this run observed has
+        its own status and -Today. An untested one takes them from the
+        baseline, which took them from its own baseline, so an open finding
+        stays open for as many weeks as the check goes unanswered, and only
+        a run that answers changes it. WAS (TheHub #60989 review): plain
+        'untested', so Compare-Assessment carried an open critical for one
+        week, then dropped it (85, 85, 100 '+0'), and the fix that came later
+        never showed as resolved. A check that has never answered has neither
+        field (null).
+
+        With a baseline, Compare-Assessment.ps1 runs (it honours
+        last_known_status) and writes change-summary.json into -OutDir. The
+        value is one of
+
+            <N>/100 (<Band>, <+/-d> vs <yyyy-MM-dd>)
+            <N>/100 (<Band>, <+/-d> vs <date>; <k> check(s) carried, last observed <oldest date>)
+            <N>/100 (<Band>, no prior weekly findings.json)
+            <N>/100 (<Band>, <date> was not scored)
+            <N>/100 (<Band>, comparison with <date> failed)
+            not scored (<k> of 5 checks have never answered)
+
+        'not scored' is given whenever any check has no known state: a score
+        that counts a never-answered check as fine is a guess, and the review
+        found the first all-unknown run reading 100/100 (Strong). The value
+        never contains 'unknown': netassess-ingest fails a run on any line
+        that does, and each unanswered check's own line already says so.
+
+    .OUTPUTS
+        Value (the text after the bullet label), Line (the whole bullet),
+        Score and Band ($null when not scored), Delta ($null without a scored
+        baseline), Baseline (folder name or $null), Carried (count),
+        NeverAnswered (count).
+    #>
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseSingularNouns', '', Justification = 'Writes findings.json, a list of findings.')]
+    [CmdletBinding()]
+    [OutputType([pscustomobject])]
+    param(
+        [Parameter(Mandatory)][object[]]$Findings,
+        [Parameter(Mandatory)][string]$OutDir,
+        [Parameter(Mandatory)][string]$Root,
+        [Parameter(Mandatory)][string]$Today,
+        [Parameter(Mandatory)][string]$ComparePath
+    )
+
+    $observed = @('open', 'resolved')
+    $baseline = Get-WeeklyFindingsBaseline -Root $Root -Today $Today
+    $when = if ($baseline) { $baseline.Name.Substring(0, 10) } else { $null }
+
+    # The baseline's known state per id: what it observed, or what it carried.
+    $known = @{}
+    $baselineScored = $false
+    if ($baseline) {
+        $base = @(Get-Content -LiteralPath (Join-Path $baseline.FullName 'findings.json') -Raw | ConvertFrom-Json | ForEach-Object { $_ })
+        foreach ($b in $base) {
+            if ($observed -contains "$($b.status)") {
+                $known["$($b.id)"] = @{ Status = "$($b.status)"; Date = $when }
+            } elseif ($observed -contains "$($b.last_known_status)") {
+                $known["$($b.id)"] = @{ Status = "$($b.last_known_status)"; Date = "$($b.last_observed)" }
+            }
+        }
+        $baselineScored = (@($base | Where-Object { -not $known.ContainsKey("$($_.id)") }).Count -eq 0)
+    }
+
+    $written = @()
+    $effective = @()
+    $carried = @()
+    $never = 0
+    foreach ($f in @($Findings)) {
+        $lastStatus = $null; $lastDate = $null
+        if ($observed -contains "$($f.status)") {
+            $lastStatus = "$($f.status)"; $lastDate = $Today
+        } elseif ($known.ContainsKey("$($f.id)")) {
+            $lastStatus = $known["$($f.id)"].Status; $lastDate = $known["$($f.id)"].Date
+            $carried += $lastDate
+        } else {
+            $never++
+        }
+        $written += [pscustomobject][ordered]@{
+            id                = $f.id
+            title             = $f.title
+            severity          = $f.severity
+            cis               = $f.cis
+            status            = $f.status
+            last_known_status = $lastStatus
+            last_observed     = $lastDate
+        }
+        $effective += [pscustomobject]@{ severity = $f.severity; status = $(if ($lastStatus) { $lastStatus } else { $f.status }) }
+    }
+
+    # -InputObject keeps a one-element list a JSON array.
+    ConvertTo-Json -InputObject @($written) -Depth 4 | Set-Content -LiteralPath (Join-Path $OutDir 'findings.json')
+
+    $compared = $null
+    $failed = $false
+    if ($baseline) {
+        try {
+            & $ComparePath -Baseline $baseline.FullName -Current $OutDir *> $null
+            $compared = Get-Content -LiteralPath (Join-Path $OutDir 'change-summary.json') -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+        } catch {
+            # The comparison is what failed, not a check: say so without the
+            # word the ingest gate reads as "a check did not run".
+            Write-Warning "Compare-Assessment against $when failed: $($_.Exception.Message)"
+            $failed = $true
+        }
+    }
+
+    $result = [ordered]@{
+        Value = $null; Line = $null; Score = $null; Band = $null; Delta = $null
+        Baseline = $(if ($baseline) { $baseline.Name } else { $null })
+        Carried = $carried.Count; NeverAnswered = $never
+    }
+    if ($never) {
+        $result.Value = "not scored ($never of $(@($Findings).Count) checks have never answered)"
+    } else {
+        $mine = Get-WeeklyPostureScore -Findings $effective
+        $result.Score = $mine.Score; $result.Band = $mine.Band
+        if (-not $baseline) {
+            $context = 'no prior weekly findings.json'
+        } elseif ($failed) {
+            $context = "comparison with $when failed"
+        } elseif (-not $baselineScored) {
+            $context = "$when was not scored"
+        } else {
+            $result.Score = [int]$compared.score_current
+            $result.Band = "$($compared.band_current)"
+            $result.Delta = [int]$compared.score_delta
+            $sign = if ($result.Delta -ge 0) { '+' } else { '-' }
+            $context = "$sign$([Math]::Abs($result.Delta)) vs $when"
+        }
+        if ($carried.Count) {
+            $oldest = @($carried | Sort-Object)[0]
+            $noun = if ($carried.Count -eq 1) { 'check' } else { 'checks' }
+            $context += "; $($carried.Count) $noun carried, last observed $oldest"
+        }
+        $result.Value = "$($result.Score)/100 ($($result.Band), $context)"
+    }
+    $result.Line = "- **Posture score:** $($result.Value)"
+    return [pscustomobject]$result
+}
