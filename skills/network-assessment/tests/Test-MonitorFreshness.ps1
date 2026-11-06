@@ -141,8 +141,13 @@ try {
     )
     $same = $bullets.Count -ge 6 -and (@(0..5 | Where-Object { [string]::CompareOrdinal($bullets[$_], $expected[$_]) -ne 0 }).Count -eq 0)
     Check -Name "the six existing bullets are unchanged" -Test { $same } -Shown "$($bullets.Count) bullet(s)"
-    $last = if ($bullets.Count) { $bullets[-1] } else { '' }
-    Check -Name "last bullet is Threat monitor last run" -Test { $bullets.Count -eq 7 -and $last -match '^- \*\*Threat monitor last run:\*\* \$\(?\$?\w' } -Shown $last
+    # Agreed order for PRs #25 -> #26 -> #27: the six original bullets, this
+    # one seventh, then #27's 'Posture score' last. So this pins the seventh
+    # bullet, not the last one, and allows only that one after it.
+    $seventh = if ($bullets.Count -ge 7) { $bullets[6] } else { '' }
+    Check -Name "7th bullet, right after WAN, is Threat monitor last run" -Test { $seventh -match '^- \*\*Threat monitor last run:\*\* \$\(?\$?\w' } -Shown $seventh
+    $after = @($bullets | Select-Object -Skip 7)
+    Check -Name "only the posture score may follow it" -Test { $after.Count -le 1 -and @($after | Where-Object { $_ -notlike '- **Posture score:** *' }).Count -eq 0 } -Shown "$($after.Count) after"
 
     $calls = @($ast.FindAll({ param($a) $a -is [System.Management.Automation.Language.CommandAst] -and $a.GetCommandName() -eq 'Get-MonitorFreshnessVerdict' }, $true))
     $callText = if ($calls.Count) { $calls[0].Extent.Text } else { 'no call' }
