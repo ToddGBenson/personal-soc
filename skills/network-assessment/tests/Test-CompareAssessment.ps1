@@ -68,6 +68,27 @@ try {
     Check -What '...it is not re-assessed'            -Got $s.not_reassessed -Want 1
     Check -What '...and counted once, not twice'      -Got $s.score_current  -Want 93
     Check -What '...and is not reported as new'       -Got $s.new            -Want 0
+
+    Write-Host ""
+    Write-Host "a carried baseline keeps its last known state (TheHub #60989)"
+    # The weekly scan writes a finding it could not test as 'untested' with
+    # the last state a run observed. Read as plain 'untested', an open
+    # finding was carried for one week and then forgotten: the score went up
+    # for two unanswered weeks, and the fix that followed never showed.
+    $f1c = @{ id = 'F-1'; title = 'Telnet open'; severity = 'high'; status = 'untested'; last_known_status = 'open'; last_observed = '2026-10-19' }
+    $s = Run -Name 'carried-again' -Base @($f1c, $f2) -Cur @($f1c, $f2)
+    Check -What 'second unanswered week: still carried'  -Got $s.not_reassessed -Want 1
+    Check -What '...baseline score counts it'           -Got $s.score_baseline -Want 93
+    Check -What '...current score counts it'            -Got $s.score_current  -Want 93
+    Check -What '...so the delta is 0'                  -Got $s.score_delta    -Want 0
+    $s = Run -Name 'carried-fixed' -Base @($f1c, $f2) -Cur @(
+        @{ id = 'F-1'; title = 'Telnet open'; severity = 'high'; status = 'resolved' }, $f2)
+    Check -What 'answered again and fixed: resolved'    -Got $s.resolved       -Want 1
+    Check -What '...and the delta shows the fix'        -Got $s.score_delta    -Want 6
+    $f1r = @{ id = 'F-1'; title = 'Telnet open'; severity = 'high'; status = 'untested'; last_known_status = 'resolved'; last_observed = '2026-10-19' }
+    $s = Run -Name 'carried-resolved' -Base @($f1r, $f2) -Cur @($f1r, $f2)
+    Check -What 'last known resolved: not counted'      -Got $s.score_current  -Want 99
+    Check -What '...and not resolved again'             -Got $s.resolved       -Want 0
 }
 finally {
     Remove-Item $root -Recurse -Force -ErrorAction SilentlyContinue
