@@ -468,3 +468,90 @@ function Get-NetViewShareVerdict {
     $status = if ($names.Count) { "$($names.Count) ($($names -join ', '))" } else { '0' }
     return [pscustomobject]@{ Count = $names.Count; Names = [string[]]$names.ToArray(); Status = $status }
 }
+
+# ---------------------------------------------------------------------------
+# Threat-monitor freshness  (TheHub #60988)
+#
+# The Weekly Threat Monitor wrote nothing for four Sundays running (2026-09-13
+# to 10-04) while its Scheduled Task reported result 0, and nothing alerted:
+# its output exists only on local disk, where Concourse cannot see it. The
+# weekly network scan runs the next morning and its network-status.md does
+# reach Concourse, so the monitor's freshness rides on it as one more bullet.
+# A stale monitor reads 'unknown', which netassess-ingest fails on. That
+# couples the two controls on purpose (see the story's risk flags).
+# ---------------------------------------------------------------------------
+
+function Get-MonitorFreshnessVerdict {
+    <#
+    .SYNOPSIS
+        How old the newest complete threat-monitor run is, as one status line.
+
+    .DESCRIPTION
+        A run is a subfolder of Root named yyyy-MM-dd that contains all three
+        of threat-brief.md, security-digest.md and footprint.json. A folder
+        missing any of them is a run that did not finish, and is skipped in
+        favour of an older complete one. Folders dated after Today are not
+        counted (a clock that ran ahead must not hide a stale monitor).
+
+        Only folder names, dates and day counts reach Status. Nothing inside
+        a run folder is read - the files are tested for existence only - so
+        nothing personal from the brief can reach network-status.md.
+
+    .PARAMETER Root
+        The personal-monitor folder.
+
+    .PARAMETER Today
+        The date to measure from (the time of day is ignored).
+
+    .PARAMETER MaxAgeDays
+        The oldest a complete run may be and still count as fresh. 7 means one
+        missed Sunday shows on the Monday after it (8 days old).
+
+    .OUTPUTS
+        Status (string, the text for network-status.md: '2026-11-08 (1 days)'
+        or 'unknown (...)'), LastRun ([datetime] or $null), AgeDays ([int],
+        -1 when there is no complete run) and Fresh ([bool]).
+    #>
+    [CmdletBinding()]
+    [OutputType([pscustomobject])]
+    param(
+        [Parameter(Mandatory)][string]$Root,
+        [Parameter(Mandatory)][datetime]$Today,
+        [int]$MaxAgeDays = 7
+    )
+
+    $required = @('threat-brief.md', 'security-digest.md', 'footprint.json')
+    $day = $Today.Date
+
+    if (-not (Test-Path -LiteralPath $Root -PathType Container)) {
+        return [pscustomobject]@{ Status = "unknown ($Root not found)"; LastRun = $null; AgeDays = -1; Fresh = $false }
+    }
+
+    $newest = $null
+    foreach ($d in @(Get-ChildItem -LiteralPath $Root -Directory -ErrorAction SilentlyContinue)) {
+        if ($d.Name -notmatch '^\d{4}-\d{2}-\d{2}$') { continue }
+        $date = [datetime]::MinValue
+        if (-not [datetime]::TryParseExact($d.Name, 'yyyy-MM-dd', [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::None, [ref]$date)) { continue }
+        if ($date -gt $day) { continue }
+        if ($null -ne $newest -and $date -le $newest) { continue }
+        $complete = $true
+        foreach ($f in $required) {
+            if (-not (Test-Path -LiteralPath (Join-Path $d.FullName $f) -PathType Leaf)) { $complete = $false; break }
+        }
+        if ($complete) { $newest = $date }
+    }
+
+    if ($null -eq $newest) {
+        return [pscustomobject]@{ Status = "unknown (no completed run under $Root)"; LastRun = $null; AgeDays = -1; Fresh = $false }
+    }
+
+    $age = [int]($day - $newest).TotalDays
+    $stamp = $newest.ToString('yyyy-MM-dd', [Globalization.CultureInfo]::InvariantCulture)
+    if ($age -le $MaxAgeDays) {
+        return [pscustomobject]@{ Status = "$stamp ($age days)"; LastRun = $newest; AgeDays = $age; Fresh = $true }
+    }
+    return [pscustomobject]@{
+        Status  = "unknown (last complete run $stamp, $age days ago), older than the $MaxAgeDays-day limit"
+        LastRun = $newest; AgeDays = $age; Fresh = $false
+    }
+}
