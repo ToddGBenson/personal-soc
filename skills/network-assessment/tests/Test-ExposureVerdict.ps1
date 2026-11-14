@@ -119,6 +119,9 @@ other_key: ignored
     Check -Name "7547 visible, shipped (empty) allowlist: exit 1" -Test { $r.Code -eq 1 -and $r.Text -match 'FAIL: port\(s\) 7547' } -Shown "exit $($r.Code)"
     $j = Get-Content (Join-Path $r.Out 'external-exposure.json') -Raw | ConvertFrom-Json
     Check -Name "...and the json names it as unexpected" -Test { (@($j.unexpected_ports) -join ',') -eq '7547' } -Shown "$($j.unexpected_ports)"
+    # TheHub #60987: what the weekly scan's WAN line makes of the file.
+    $w = Get-WanPortsVerdict -ExposureJsonPath (Join-Path $r.Out 'external-exposure.json')
+    Check -Name "...and the weekly WAN line names it" -Test { $w -eq '7547 (NOT allowlisted: 7547)' } -Shown $w
 
     $r = Run (Allow 'ok.yml' "allowed_ports:`n  - port: 7547`n    reason: test")
     Check -Name "7547 visible and allowlisted: exit 0" -Test { $r.Code -eq 0 -and $r.Text -match 'allowlisted: 7547' } -Shown "exit $($r.Code)"
@@ -126,15 +129,27 @@ other_key: ignored
     $mock.Db = [pscustomobject]@{ ports = @(); vulns = @(); cpes = @(); hostnames = @(); tags = @() }
     $r = Run
     Check -Name "no ports visible: exit 0" -Test { $r.Code -eq 0 } -Shown "exit $($r.Code)"
+    $w = Get-WanPortsVerdict -ExposureJsonPath (Join-Path $r.Out 'external-exposure.json')
+    Check -Name "...and the weekly WAN line is 'none visible'" -Test { $w -eq 'none visible' } -Shown $w
 
     $mock.Mode = 'error'
     $r = Run
     Check -Name "InternetDB query failed: exit 2, not a pass" -Test { $r.Code -eq 2 -and $r.Text -match 'UNKNOWN' } -Shown "exit $($r.Code)"
+    $w = Get-WanPortsVerdict -ExposureJsonPath (Join-Path $r.Out 'external-exposure.json')
+    Check -Name "...and the weekly WAN line is unknown, not n/a" -Test { $w -like 'unknown*' } -Shown $w
 
     if ('Microsoft.PowerShell.Commands.HttpResponseException' -as [type]) {
         $mock.Mode = '404'
         $r = Run
         Check -Name "InternetDB 404 (not indexed): exit 0" -Test { $r.Code -eq 0 -and $r.Text -match 'HTTP 404' } -Shown "exit $($r.Code)"
+        # TheHub #60987: a 404 is an answer, so it leaves a file. Without one
+        # the weekly WAN line is 'unknown' for a clean edge. indexed:false is
+        # the shape mykronos's network_exposure adapter already reads as 404.
+        $f = Join-Path $r.Out 'external-exposure.json'
+        $j = if (Test-Path -LiteralPath $f) { Get-Content -LiteralPath $f -Raw | ConvertFrom-Json } else { $null }
+        Check -Name "...and writes indexed:false with no ports" -Test { $null -ne $j -and $j.indexed -eq $false -and @($j.ports).Count -eq 0 } -Shown "$(if ($j) { 'written' } else { 'no file' })"
+        $w = Get-WanPortsVerdict -ExposureJsonPath $f
+        Check -Name "...so the weekly WAN line is 'none visible'" -Test { $w -eq 'none visible' } -Shown $w
     } else { Write-Host "  [skip] InternetDB 404 case needs PowerShell 7's HttpResponseException" }
 
     $mock.Mode = 'ok'; $mock.Ip = $null
