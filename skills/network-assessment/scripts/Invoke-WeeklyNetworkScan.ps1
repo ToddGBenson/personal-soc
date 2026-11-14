@@ -8,7 +8,9 @@
 param(
   [string]$Cidr,
   [string]$Root = (Join-Path $env:USERPROFILE 'netassess'),
-  [string]$NmapPath = "C:\Program Files (x86)\Nmap\nmap.exe"
+  [string]$NmapPath = "C:\Program Files (x86)\Nmap\nmap.exe",
+  # The Weekly Threat Monitor's output folder (TheHub #60988).
+  [string]$MonitorRoot = (Join-Path $env:USERPROFILE 'personal-soc\personal-monitor')
 )
 $ErrorActionPreference = 'Continue'
 $today = Get-Date -Format 'yyyy-MM-dd'
@@ -105,20 +107,22 @@ $openAP = Get-OpenApVerdict -NetshText $wifiTxt -GatewayMac $gwMac
 
 # external (WAN) exposure — what the internet sees (needs the home public IP, so it runs locally)
 & (Join-Path $PSScriptRoot 'Get-ExternalExposure.ps1') -OutDir $out *> "$out\raw\external-run.txt"
-$extPorts = 'n/a'
-if(Test-Path "$out\external-exposure.json"){
-  try { $ext = Get-Content "$out\external-exposure.json" -Raw | ConvertFrom-Json
-        $extPorts = if($ext.ports){ ($ext.ports -join ', ') } else { 'none visible' }
-        # Set by Get-ExternalExposure against config/exposure-allowlist.yml (#60852).
-        $unexpected = @($ext.unexpected_ports | Where-Object { $null -ne $_ })
-        if($unexpected.Count){ $extPorts += " (NOT allowlisted: $($unexpected -join ', '))" } }
-  catch {
-    # The report keeps 'n/a' (no answer, same as a missing file), but a file
-    # that exists and will not parse is a broken check, not an absent one, so
-    # say so rather than let it pass silently.
-    Write-Warning "external-exposure.json is unreadable, WAN ports reported as n/a: $($_.Exception.Message)"
-  }
-}
+# WAS: the WAN value defaulted to 'n/a' and kept it for a missing
+# external-exposure.json and for one that would not parse. netassess-ingest fails only on 'unknown', so from
+# 2026-08-24 to 2026-10-19 every weekly run passed a WAN check that had not
+# answered (TheHub #60987). Get-WanPortsVerdict (NetAssess.Verdicts.ps1,
+# fixtures in tests/Test-WanPortsVerdict.ps1) says 'unknown' for both, and
+# keeps the old wording for a definite answer.
+$extPorts = Get-WanPortsVerdict -ExposureJsonPath "$out\external-exposure.json"
+if($extPorts -like 'unknown*'){ Write-Warning "WAN ports: $extPorts" }
+
+# Threat monitor freshness (TheHub #60988). The monitor ran nothing for four
+# Sundays while its Scheduled Task reported result 0; its output is only on
+# local disk. It rides on this report: a complete run more than 7 days old is
+# 'unknown', which netassess-ingest fails on. Folder names and dates only -
+# nothing inside a run is read (Get-MonitorFreshnessVerdict, fixtures in
+# tests/Test-MonitorFreshness.ps1).
+$monitorFresh = (Get-MonitorFreshnessVerdict -Root $MonitorRoot -Today (Get-Date)).Status
 
 # findings.json + posture score (TheHub #60989). Compare-Assessment.ps1 needs
 # findings.json, and until now only a full engagement wrote one, so the score
@@ -144,7 +148,7 @@ $postureScore = if ($posture.Value) { $posture.Value } else { 'not scored (the p
 - **NAS anonymous shares listed:** $anon
 - **Open Wi-Fi AP:** $openAP
 - **WAN (external) ports visible:** $extPorts
-- **Posture score:** $postureScore
+- **Threat monitor last run:** $monitorFresh
 
 _Raw data + inventory.csv in $out. Full CIS findings + digest: run the network-assessment skill or fold into the weekly digest._
 "@ | Set-Content "$out\network-status.md"
