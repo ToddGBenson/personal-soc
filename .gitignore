@@ -13,6 +13,7 @@ run-log.md
 inventory.csv
 findings.json
 footprint.json
+footprint-diff.json
 threat-brief.md
 
 # OS / editor cruft

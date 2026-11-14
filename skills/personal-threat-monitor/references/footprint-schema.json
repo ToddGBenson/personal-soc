@@ -1,0 +1,83 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "personal-threat-monitor/footprint-schema.json",
+  "title": "personal-threat-monitor footprint.json",
+  "description": "The contract for personal-monitor/<YYYY-MM-DD>/footprint.json, the structured output of Check A. It exists so consecutive runs can be compared by scripts/Compare-Footprint.ps1 instead of by the model. A finding's id is its category plus its source (for example 'broker:spokeo'), never the run date, so the same exposure carries the same id every week. A finding that was looked for and is gone is kept with status 'removed'; one that was not looked at this run is kept with status 'untested'. Dropping a finding from the file does not mean it was fixed: Compare-Footprint reports a dropped id as not_reassessed. This document is the reference; the check that runs is the hand-written validator in scripts/FootprintSchema.ps1 (Windows PowerShell 5.1 has no Test-Json), and tests/Test-CompareFootprint.ps1 fails if the two disagree on the id pattern or the enums.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "run_date", "findings"],
+  "properties": {
+    "schema_version": {
+      "description": "Always 1. A change to this contract bumps it.",
+      "const": 1
+    },
+    "run_date": {
+      "description": "The run's date, matching its folder name.",
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+    },
+    "notes": {
+      "description": "Free text about the run as a whole (sources that were down, consent not given). Never read by the diff.",
+      "type": "string"
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "category", "source", "severity", "confidence", "status"],
+        "properties": {
+          "id": {
+            "description": "category:source. Stable across runs and unique within a file. Never derived from the run date.",
+            "type": "string",
+            "pattern": "^[a-z0-9-]+:[a-z0-9.-]+$"
+          },
+          "category": {
+            "description": "The source category from references/osint-sources.md, for example broker, breach, paste, social, forum, code, records, search, image.",
+            "type": "string",
+            "pattern": "^[a-z0-9-]+$"
+          },
+          "source": {
+            "description": "A stable key for the source: a broker or site name, or a breach's domain, for example spokeo or example.com.",
+            "type": "string",
+            "pattern": "^[a-z0-9.-]+$"
+          },
+          "severity": {
+            "description": "The digest's gate: page (act now), nudge (act this week), log (record only). Never free text.",
+            "enum": ["page", "nudge", "log"]
+          },
+          "confidence": {
+            "description": "Per references/verification.md. An unverified common-name hit is ambiguous.",
+            "enum": ["confirmed", "inferred", "ambiguous"]
+          },
+          "status": {
+            "description": "open: present this run. removed: looked for this run and gone. untested: not looked at this run.",
+            "enum": ["open", "removed", "untested"]
+          },
+          "summary": {
+            "description": "What is exposed, in a sentence.",
+            "type": "string"
+          },
+          "exposed": {
+            "description": "The kinds of data exposed (address, phone, relatives, ...), not the data itself.",
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "removal_action": {
+            "description": "The opt-out or removal step from references/broker-optout.md.",
+            "type": "string"
+          },
+          "first_seen": {
+            "description": "The run_date the id first appeared.",
+            "type": "string",
+            "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+          },
+          "evidence": {
+            "description": "Where the run log records the evidence. Never the exposed data.",
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}
