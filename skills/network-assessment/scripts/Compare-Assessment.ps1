@@ -32,6 +32,18 @@ function Load($dir){
 }
 $base = Load $Baseline
 $cur  = Load $Current
+
+# A baseline finding its own run could not test ('untested') stands at the
+# last state a run observed, when the file records one (last_known_status;
+# the weekly scan writes it, TheHub #60989). WAS: plain 'untested', so an
+# open finding was carried for one week, then dropped from the score, and a
+# fix that came later never showed as resolved.
+function Get-KnownStatus($f){
+  if($f.status -eq 'untested' -and @('open','resolved') -contains "$($f.last_known_status)"){ return "$($f.last_known_status)" }
+  return $f.status
+}
+$base = @($base | ForEach-Object {
+  [PSCustomObject]@{ id = $_.id; title = $_.title; severity = $_.severity; status = (Get-KnownStatus $_) } })
 $baseById = @{}; foreach($f in $base){ $baseById[$f.id] = $f }
 $curById  = @{}; foreach($f in $cur){ $curById[$f.id]  = $f }
 
