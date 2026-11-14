@@ -8,7 +8,9 @@
 param(
   [string]$Cidr,
   [string]$Root = (Join-Path $env:USERPROFILE 'netassess'),
-  [string]$NmapPath = "C:\Program Files (x86)\Nmap\nmap.exe"
+  [string]$NmapPath = "C:\Program Files (x86)\Nmap\nmap.exe",
+  # The Weekly Threat Monitor's output folder (TheHub #60988).
+  [string]$MonitorRoot = (Join-Path $env:USERPROFILE 'personal-soc\personal-monitor')
 )
 $ErrorActionPreference = 'Continue'
 $today = Get-Date -Format 'yyyy-MM-dd'
@@ -114,6 +116,14 @@ $openAP = Get-OpenApVerdict -NetshText $wifiTxt -GatewayMac $gwMac
 $extPorts = Get-WanPortsVerdict -ExposureJsonPath "$out\external-exposure.json"
 if($extPorts -like 'unknown*'){ Write-Warning "WAN ports: $extPorts" }
 
+# Threat monitor freshness (TheHub #60988). The monitor ran nothing for four
+# Sundays while its Scheduled Task reported result 0; its output is only on
+# local disk. It rides on this report: a complete run more than 7 days old is
+# 'unknown', which netassess-ingest fails on. Folder names and dates only -
+# nothing inside a run is read (Get-MonitorFreshnessVerdict, fixtures in
+# tests/Test-MonitorFreshness.ps1).
+$monitorFresh = (Get-MonitorFreshnessVerdict -Root $MonitorRoot -Today (Get-Date)).Status
+
 @"
 ## Network status — $today (local scheduled scan)
 
@@ -123,6 +133,7 @@ if($extPorts -like 'unknown*'){ Write-Warning "WAN ports: $extPorts" }
 - **NAS anonymous shares listed:** $anon
 - **Open Wi-Fi AP:** $openAP
 - **WAN (external) ports visible:** $extPorts
+- **Threat monitor last run:** $monitorFresh
 
 _Raw data + inventory.csv in $out. Full CIS findings + digest: run the network-assessment skill or fold into the weekly digest._
 "@ | Set-Content "$out\network-status.md"
