@@ -149,6 +149,7 @@ $postureScore = if ($posture.Value) { $posture.Value } else { 'not scored (the p
 - **Open Wi-Fi AP:** $openAP
 - **WAN (external) ports visible:** $extPorts
 - **Threat monitor last run:** $monitorFresh
+- **Posture score:** $postureScore
 
 _Raw data + inventory.csv in $out. Full CIS findings + digest: run the network-assessment skill or fold into the weekly digest._
 "@ | Set-Content "$out\network-status.md"
