@@ -11,7 +11,9 @@
 
     Test-FootprintDocument   -> $null when valid, else "<json path>: <reason>" for the FIRST
                                 failure, for example "$.findings[2].severity: must be one of
-                                page|nudge|log (got 'High')".
+                                page|nudge|log". The reason names the field and the rule,
+                                never the value: a footprint.json holds the owner's exposure
+                                data and this text goes to the run log (TheHub #61473).
     Compare-FootprintDocument -> the footprint-diff object (new, removed, not_reassessed,
                                 severity_changed). Both inputs must already be valid.
 .NOTES
@@ -46,9 +48,15 @@ function Test-FootprintDate([object]$Value) {
   return [datetime]::TryParseExact($Value, 'yyyy-MM-dd', [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::None, [ref]$d)
 }
 
-function Format-FootprintValue([object]$Value) {
+# The JSON type of a value, never the value itself (TheHub #61473).
+function Format-FootprintType([object]$Value) {
   if ($null -eq $Value) { return 'null' }
-  return "'$Value'"
+  if ($Value -is [string]) { return 'a string' }
+  if ($Value -is [bool]) { return 'a boolean' }
+  if ($Value -is [array]) { return 'an array' }
+  if ($Value -is [System.Management.Automation.PSCustomObject]) { return 'an object' }
+  if ($Value -is [int] -or $Value -is [long] -or $Value -is [double] -or $Value -is [decimal]) { return 'a number' }
+  return 'an unsupported value'
 }
 
 function Test-FootprintDocument {
@@ -71,11 +79,11 @@ function Test-FootprintDocument {
 
   $v = (Get-FootprintProperty $Document 'schema_version').Value
   if (-not (($v -is [int] -or $v -is [long]) -and $v -eq 1)) {
-    return "`$.schema_version: must be the integer 1 (got $(Format-FootprintValue $v))"
+    return "`$.schema_version: must be the integer 1 (got $(Format-FootprintType $v))"
   }
   $v = (Get-FootprintProperty $Document 'run_date').Value
   if (-not (Test-FootprintDate $v)) {
-    return "`$.run_date: must be a yyyy-MM-dd date string (got $(Format-FootprintValue $v))"
+    return "`$.run_date: must be a yyyy-MM-dd date string (got $(Format-FootprintType $v))"
   }
   $notes = Get-FootprintProperty $Document 'notes'
   if ($notes.Found -and $notes.Value -isnot [string]) { return '$.notes: must be a string' }
@@ -97,31 +105,31 @@ function Test-FootprintDocument {
     foreach ($k in $R.ItemRequired) {
       $got = Get-FootprintProperty $f $k
       if (-not $got.Found) { return "$at.${k}: required" }
-      if ($got.Value -isnot [string]) { return "$at.${k}: must be a string (got $(Format-FootprintValue $got.Value))" }
+      if ($got.Value -isnot [string]) { return "$at.${k}: must be a string (got $(Format-FootprintType $got.Value))" }
       $item[$k] = $got.Value
     }
 
     if ($item.id -cnotmatch $R.IdPattern) {
-      return "$at.id: must match $($R.IdPattern), category:source, never a run-scoped id (got '$($item.id)')"
+      return "$at.id: must match $($R.IdPattern), category:source, never a run-scoped id"
     }
     if ($seen.ContainsKey($item.id)) {
-      return "$at.id: duplicate of `$.findings[$($seen[$item.id])].id ('$($item.id)')"
+      return "$at.id: duplicate of `$.findings[$($seen[$item.id])].id"
     }
     $seen[$item.id] = $i
     if ($item.category -cnotmatch $R.CategoryPattern) {
-      return "$at.category: must match $($R.CategoryPattern) (got '$($item.category)')"
+      return "$at.category: must match $($R.CategoryPattern)"
     }
     if ($item.source -cnotmatch $R.SourcePattern) {
-      return "$at.source: must match $($R.SourcePattern) (got '$($item.source)')"
+      return "$at.source: must match $($R.SourcePattern)"
     }
     $want = "$($item.category):$($item.source)"
     if ($item.id -cne $want) {
-      return "$at.id: must be category:source, '$want' (got '$($item.id)')"
+      return "$at.id: must equal this finding's category:source"
     }
     foreach ($pair in @(@('severity', $R.Severity), @('confidence', $R.Confidence), @('status', $R.Status))) {
       $k = $pair[0]; $allowed = $pair[1]
       if ($allowed -cnotcontains $item[$k]) {
-        return "$at.${k}: must be one of $($allowed -join '|') (got '$($item[$k])')"
+        return "$at.${k}: must be one of $($allowed -join '|')"
       }
     }
 
@@ -131,7 +139,7 @@ function Test-FootprintDocument {
     }
     $got = Get-FootprintProperty $f 'first_seen'
     if ($got.Found -and -not (Test-FootprintDate $got.Value)) {
-      return "$at.first_seen: must be a yyyy-MM-dd date string (got $(Format-FootprintValue $got.Value))"
+      return "$at.first_seen: must be a yyyy-MM-dd date string (got $(Format-FootprintType $got.Value))"
     }
     $got = Get-FootprintProperty $f 'exposed'
     if ($got.Found) {
@@ -150,7 +158,9 @@ function Compare-FootprintDocument {
     removed           'removed' in current; open or untested in the baseline
     not_reassessed    open or untested in the baseline; absent from current, or 'untested' there.
                       An id that drops out of a run is never counted as removed.
-    severity_changed  open in both, severity differs
+    severity_changed  open in current; open or untested in the baseline; severity differs.
+                      An untested baseline still carries the severity last reported, so a
+                      change against it is reported (TheHub #61473).
   #>
   [CmdletBinding()]
   [OutputType([System.Collections.Specialized.OrderedDictionary])]
@@ -173,7 +183,7 @@ function Compare-FootprintDocument {
     if ($f.status -ceq 'open') {
       if ($null -eq $b -or $b.status -ceq 'removed') {
         $new.Add([ordered]@{ id = $f.id; severity = $f.severity; confidence = $f.confidence; reappeared = ($null -ne $b) })
-      } elseif ($b.status -ceq 'open' -and $b.severity -cne $f.severity) {
+      } elseif (@('open', 'untested') -ccontains $b.status -and $b.severity -cne $f.severity) {
         $severityChanged.Add([ordered]@{ id = $f.id; from = $b.severity; to = $f.severity })
       }
     } elseif ($f.status -ceq 'removed') {
