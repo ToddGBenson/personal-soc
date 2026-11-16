@@ -82,7 +82,10 @@ function Invoke-Compare([string]$Baseline, [string]$Current) {
     $r = @{ Exit = $null; Threw = $false; Output = ''; Diff = $null; Wrote = $false }
     $global:LASTEXITCODE = $null
     try {
-        $r.Output = & $script:Compare -Baseline $Baseline -Current $Current *>&1 | Out-String
+        # -Width: Windows PowerShell 5.1's Out-String wraps at the host width (about 80), which
+        # split a long temp path in two and failed "names the file" there only (TheHub #61473).
+        # The script's own Write-Host line is not wrapped; this capture was.
+        $r.Output = & $script:Compare -Baseline $Baseline -Current $Current *>&1 | Out-String -Width 4096
         $r.Exit = $global:LASTEXITCODE
     } catch {
         $r.Threw = $true; $r.Output = $_.Exception.Message
