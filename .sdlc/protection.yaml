@@ -1,0 +1,49 @@
+# personal-soc's intended branch protection on `main`. Refs: TheHub #61738
+#
+# The DECLARED state, in keel's format (keel .sdlc/protection.yaml,
+# scripts/protection-drift.py). Estate policy (TheHub #61731) keeps protection
+# as CLASSIC branch protection, declared here, and no rulesets.
+#
+# A value that differs from keel's configure-github.sh default needs a
+# `reason:` citing a decision id or Hub story, or the drift check refuses the
+# declaration.
+#
+# Changing a value here does not change GitHub. The operator applies the
+# classic `PUT repos/ToddGBenson/personal-soc/branches/main/protection` given in
+# PR #31, then this file is what the drift check holds GitHub to.
+#
+# Also set by that PUT but not declared fields in keel's checker:
+# dismiss_stale_reviews true, strict false (E10), required_conversation_resolution
+# true, allow_deletions false. Both required checks are pinned to app_id 15368
+# (GitHub Actions).
+#
+# Live on 2026-11-16, before the change: {checks: null, enforce_admins: false,
+# reviews: 1, signatures: false, linear: true, force_pushes: false}.
+version: 1
+branch: main
+fields:
+  enforce_admins:
+    value: true
+  required_approving_review_count:
+    value: 0
+    reason: >-
+      TheHub #61738, estate exception E1: personal-soc has one operator, who
+      cannot approve their own pull request. The required checks are the gate.
+  required_signatures:
+    value: false
+    reason: >-
+      TheHub #61739, estate exception E9: off on main, and whether to require
+      signed commits is an open operator decision. Flip this to true in the
+      same change that turns it on.
+  required_linear_history:
+    value: true
+  allow_force_pushes:
+    value: false
+  required_status_checks:
+    value: [no-personal-data, skill-tests]
+    reason: >-
+      TheHub #61738: skill-tests (tests.yml) and no-personal-data (guard.yml)
+      both run on every pull request with no paths filter, so neither can leave
+      a PR unchecked. strict is false (estate exception E10): with one operator
+      merging in batches, requiring every head to be up to date with main would
+      force a rebase and re-run per merge.
