@@ -1,0 +1,31 @@
+name: tests
+
+# TheHub #61738: one check that posts on EVERY pull request, so it can be a
+# required status check. No `paths:` filter on purpose - a required check that
+# skips a PR leaves that PR unmergeable (or, worse, unchecked).
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  merge_group:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tests-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Job id is the check name a ruleset requires: keep it stable.
+  skill-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      # SHA-pinned like guard.yml; dependabot.yml keeps it moving.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - name: Run every skills/*/tests/Test-*.ps1
+        shell: pwsh
+        run: ./.github/scripts/Invoke-AllTests.ps1
