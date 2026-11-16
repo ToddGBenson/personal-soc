@@ -182,6 +182,73 @@ try {
     $r = Invoke-Compare $good $missing
     Check -Name "a run folder with no footprint.json is exit 2" -Test { $r.Exit -eq 2 -and -not $r.Wrote } -Shown "exit $($r.Exit) $($r.Output.Trim())"
 
+    # ---- a broken footprint.json never puts its content in the run log ----
+    # TheHub #61473. On Windows PowerShell 5.1 (the scheduled task's host)
+    # ConvertFrom-Json throws "Invalid JSON primitive: <the rest of the file>",
+    # and Compare-Footprint.ps1 printed that message, so the owner's exposure
+    # summaries reached the run log. The validator also echoed the rejected
+    # value ("got '<value>'"). Every case below plants a canary in the file and
+    # requires: exit 2, the file and the failing field named, no canary in the
+    # output. The 5.1 parser is simulated with a ConvertFrom-Json function in
+    # scope (a function wins over the cmdlet, and the script sees the
+    # caller's functions), so this runs red on pwsh 7 too.
+    $canary = 'canary-61473-' + [guid]::NewGuid().ToString('N').Substring(0, 8)
+    $canaryRx = [regex]::Escape($canary)
+    $truncated = '{ "schema_version": 1, "run_date": "2026-10-18", "findings": [ { "summary": "' + $canary + ' listed at 12 Example St" '
+
+    $leakCases = @(
+        @{ Name = "not JSON, Windows PowerShell 5.1 parser"; Path = '$'; Raw = $truncated; Simulate51 = $true },
+        @{ Name = "not JSON, pwsh 7 parser"; Path = '$'; Raw = $truncated; Simulate51 = $false },
+        @{ Name = "a canary in severity"; Path = '$.findings[0].severity'
+            Doc = (Doc '2026-10-18' @((Finding 'broker' 'example-people' $canary))) },
+        @{ Name = "a canary in status"; Path = '$.findings[0].status'
+            Doc = (Doc '2026-10-18' @((Finding 'broker' 'example-people' 'log' $canary))) },
+        @{ Name = "a canary in run_date"; Path = '$.run_date'
+            Doc = (Doc $canary @()) },
+        @{ Name = "a canary in an id that is not category:source"; Path = '$.findings[0].id'
+            Doc = (Doc '2026-10-18' @(([ordered]@{ id = "broker:$canary"; category = 'broker'; source = 'example-people'; severity = 'log'; confidence = 'confirmed'; status = 'open' }))) },
+        @{ Name = "a canary in a source behind a mismatched id"; Path = '$.findings[0].id'
+            Doc = (Doc '2026-10-18' @(([ordered]@{ id = 'broker:example-people'; category = 'broker'; source = $canary; severity = 'log'; confidence = 'confirmed'; status = 'open' }))) },
+        @{ Name = "a canary in a duplicated id"; Path = '$.findings[1].id'
+            Doc = (Doc '2026-10-18' @((Finding 'broker' $canary), (Finding 'broker' $canary))) },
+        @{ Name = "a canary in first_seen"; Path = '$.findings[0].first_seen'
+            Doc = (Doc '2026-10-18' @(([ordered]@{ id = 'broker:example-people'; category = 'broker'; source = 'example-people'; severity = 'log'; confidence = 'confirmed'; status = 'open'; first_seen = $canary }))) },
+        @{ Name = "a canary in a non-string required field"; Path = '$.findings[0].severity'
+            Doc = (Doc '2026-10-18' @(([ordered]@{ id = 'broker:example-people'; category = 'broker'; source = 'example-people'; severity = @{ note = $canary }; confidence = 'confirmed'; status = 'open' }))) }
+    )
+    foreach ($c in $leakCases) {
+        $bad = if ($c.ContainsKey('Raw')) { RunDir -Raw $c.Raw } else { RunDir $c.Doc }
+        $badFile = Join-Path -Path $bad -ChildPath 'footprint.json'
+        $r = if ($c.Simulate51) {
+            & {
+                # Parses like the real cmdlet; fails like 5.1, with the text in the message.
+                function ConvertFrom-Json {
+                    param([Parameter(ValueFromPipeline = $true)][object]$InputObject)
+                    try { Microsoft.PowerShell.Utility\ConvertFrom-Json -InputObject $InputObject }
+                    catch { throw [System.ArgumentException]::new("Invalid JSON primitive: $InputObject.") }
+                }
+                Invoke-Compare $good $bad
+            }
+        } else { Invoke-Compare $good $bad }
+        $shownPath = [regex]::Escape($c.Path)
+        Check -Name "$($c.Name): exit 2, no diff" -Test { $r.Exit -eq 2 -and -not $r.Wrote } -Shown "exit $($r.Exit)"
+        Check -Name "  ...the output names the file and $($c.Path)" -Test { $r.Output.Contains($badFile) -and $r.Output -match "$shownPath(\W|$)" } -Shown ($r.Output.Trim() -replace '\s+', ' ')
+        Check -Name "  ...and never the file's content (canary absent)" -Test { $r.Output -notmatch $canaryRx } -Shown ($r.Output.Trim() -replace '\s+', ' ')
+    }
+
+    # ---- a severity change on an id untested in the baseline --------------
+    # TheHub #61473: severity_changed required the id to be open in BOTH runs,
+    # so an id that was untested last run and is open this run at a different
+    # severity was reported nowhere (not new, not changed).
+    $ub = RunDir (Doc '2026-10-11' @((Finding 'broker' 'example-people' 'nudge' 'untested'), (Finding 'broker' 'example-search' 'log' 'untested')))
+    $uc = RunDir (Doc '2026-10-18' @((Finding 'broker' 'example-people' 'page'), (Finding 'broker' 'example-search' 'log')))
+    $r = Invoke-Compare $ub $uc
+    $sc = @(@($r.Diff.severity_changed) | Where-Object { $null -ne $_ })
+    $scShown = ($sc | ForEach-Object { "$($_.id) $($_.from)->$($_.to)" }) -join ';'
+    Check -Name "untested in baseline, open now at a new severity: severity_changed" -Test { $r.Exit -eq 0 -and $sc.Count -eq 1 -and $sc[0].id -eq 'broker:example-people' -and $sc[0].from -eq 'nudge' -and $sc[0].to -eq 'page' } -Shown $scShown
+    Check -Name "  ...and an untested id open now at the same severity is not" -Test { $r.Wrote -and $scShown -notmatch 'example-search' } -Shown $scShown
+    Check -Name "  ...and neither is reported as new" -Test { $r.Wrote -and (Ids $r.Diff 'new') -eq '' } -Shown (Ids $r.Diff 'new')
+
     # ---- the validator as a function --------------------------------------
     $okDoc = '{"schema_version":1,"run_date":"2026-10-18","findings":[{"id":"broker:example-people","category":"broker","source":"example-people","severity":"log","confidence":"inferred","status":"open"}]}' | ConvertFrom-Json
     $v = if (Get-Command -Name Test-FootprintDocument -ErrorAction SilentlyContinue) { Test-FootprintDocument -Document $okDoc } else { 'Test-FootprintDocument not defined' }
