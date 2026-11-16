@@ -47,14 +47,13 @@ $ErrorActionPreference = 'Stop'
 
 if (-not $OutDir) { $OutDir = $Current }
 
-function Stop-Invalid([string]$File, [string]$Why) {
-  Write-Host "INVALID: $File at $Why. No diff written; this is not a pass." -ForegroundColor Yellow
-  exit 2
-}
-
+# Returns @{ Doc; Error }. Error is "<file> at <json path>: <rule>" or $null. It never
+# holds the file's content (TheHub #61473). Nothing here writes output: a function's
+# output is its return value, so a message written from inside would be swallowed by
+# the assignment at the call site.
 function Read-Footprint([string]$Dir) {
   $file = Join-Path -Path $Dir -ChildPath 'footprint.json'
-  if (-not (Test-Path -LiteralPath $file -PathType Leaf)) { Stop-Invalid $file '$: file not found' }
+  if (-not (Test-Path -LiteralPath $file -PathType Leaf)) { return @{ Doc = $null; Error = "$file at `$: file not found" } }
   $text = [IO.File]::ReadAllText((Resolve-Path -LiteralPath $file).Path)
   $doc = $null
   # Never print the parser's message: on Windows PowerShell 5.1 it is "Invalid JSON
@@ -63,22 +62,33 @@ function Read-Footprint([string]$Dir) {
   try { $doc = ConvertFrom-Json -InputObject $text } catch {
     $where = ''
     if ("$($_.Exception.Message)" -match 'line (\d+), position (\d+)') { $where = " near line $($Matches[1]), position $($Matches[2])" }
-    Stop-Invalid $file "`$: not valid JSON$where"
+    return @{ Doc = $null; Error = "$file at `$: not valid JSON$where" }
   }
   $why = Test-FootprintDocument -Document $doc
-  if ($why) { Stop-Invalid $file $why }
-  return $doc
+  if ($why) { return @{ Doc = $null; Error = "$file at $why" } }
+  return @{ Doc = $doc; Error = $null }
 }
 
+# Every message is one plain string on the output stream, not Write-Host: Windows
+# PowerShell 5.1 formats a host record redirected with *> and wraps it at the host width,
+# which split the INVALID line in the run log; a string is written as-is (TheHub #61473).
 $base = Read-Footprint $Baseline
-$cur = Read-Footprint $Current
+$cur = if ($base.Error) { $null } else { Read-Footprint $Current }
+foreach ($r in @($base, $cur)) {
+  if ($r -and $r.Error) {
+    Write-Output "INVALID: $($r.Error). No diff written; this is not a pass."
+    exit 2
+  }
+}
+$base = $base.Doc
+$cur = $cur.Doc
 $diff = Compare-FootprintDocument -Baseline $base -Current $cur
 
 if (-not (Test-Path -LiteralPath $OutDir -PathType Container)) { New-Item -ItemType Directory -Path $OutDir | Out-Null }
 $out = Join-Path -Path (Resolve-Path -LiteralPath $OutDir).Path -ChildPath 'footprint-diff.json'
 [IO.File]::WriteAllText($out, (ConvertTo-Json -InputObject $diff -Depth 6))
 
-Write-Host ("{0} -> {1}: new {2}, removed {3}, not reassessed {4}, severity changed {5}" -f `
+Write-Output ("{0} -> {1}: new {2}, removed {3}, not reassessed {4}, severity changed {5}" -f `
     $diff.baseline_run_date, $diff.current_run_date, $diff.new.Count, $diff.removed.Count, $diff.not_reassessed.Count, $diff.severity_changed.Count)
-Write-Host "Wrote $out"
+Write-Output "Wrote $out"
 exit 0

@@ -240,6 +240,43 @@ try {
         Check -Name "  ...and never the file's content (canary absent)" -Test { $r.Output -notmatch $canaryRx } -Shown ($r.Output.Trim() -replace '\s+', ' ')
     }
 
+    # ---- the run log: one unwrapped line, out of process -----------------
+    # TheHub #61473. On Windows PowerShell 5.1 the INVALID line was Write-Host,
+    # and `*> log` formats a host record at the host width: the log held
+    # "...\footprint.json at " and "$: not valid JSON..." on two lines. This runs
+    # the script in a child of THIS engine (powershell.exe when the test runs on
+    # 5.1), redirected the way a scheduled task's log is, under a path far wider
+    # than 80 columns, and requires each message on one line, path unbroken.
+    $engine = (Get-Process -Id $PID).Path
+    $wide = Join-Path -Path $tmp -ChildPath ('w' * 120)
+    $wideBad = Join-Path -Path $wide -ChildPath 'bad'
+    $wideA = Join-Path -Path $wide -ChildPath 'a'
+    $wideB = Join-Path -Path $wide -ChildPath 'b'
+    foreach ($d in $wideBad, $wideA, $wideB) { New-Item -ItemType Directory -Path $d -Force | Out-Null }
+    [IO.File]::WriteAllText((Join-Path -Path $wideBad -ChildPath 'footprint.json'), '{ "x": ')
+    [IO.File]::WriteAllText((Join-Path -Path $wideA -ChildPath 'footprint.json'), (ConvertTo-Json -InputObject (Doc '2026-10-11' @((Finding 'broker' 'example-people'))) -Depth 8))
+    [IO.File]::WriteAllText((Join-Path -Path $wideB -ChildPath 'footprint.json'), (ConvertTo-Json -InputObject (Doc '2026-10-18' @((Finding 'broker' 'example-people'))) -Depth 8))
+
+    function Invoke-Logged([string]$Baseline, [string]$Current) {
+        $log = Join-Path -Path $tmp -ChildPath ([guid]::NewGuid().ToString('N') + '.log')
+        $cmd = "& '$($script:Compare)' -Baseline '$Baseline' -Current '$Current' *> '$log'; exit `$LASTEXITCODE"
+        & $engine -NoProfile -NonInteractive -Command $cmd | Out-Null
+        $exit = $LASTEXITCODE
+        $lines = @()
+        if (Test-Path -LiteralPath $log) { $lines = @([IO.File]::ReadAllLines($log) | Where-Object { $_.Trim() -ne '' }) }
+        return @{ Exit = $exit; Lines = $lines }
+    }
+
+    $badFile = Join-Path -Path $wideBad -ChildPath 'footprint.json'
+    $r = Invoke-Logged $wideA $wideBad
+    $shown = ($r.Lines -join ' | ')
+    Check -Name "run log, INVALID: exit 2 and exactly one line" -Test { $r.Exit -eq 2 -and $r.Lines.Count -eq 1 } -Shown "exit $($r.Exit), $($r.Lines.Count) line(s): $shown"
+    Check -Name "  ...holding the whole file path and the JSON path" -Test { $r.Lines.Count -eq 1 -and $r.Lines[0].Contains("$badFile at `$: not valid JSON") } -Shown $shown
+
+    $r = Invoke-Logged $wideA $wideB
+    $wroteLine = "Wrote $(Join-Path -Path $wideB -ChildPath 'footprint-diff.json')"
+    Check -Name "run log, success: exit 0 and the Wrote line unwrapped" -Test { $r.Exit -eq 0 -and $r.Lines.Count -eq 2 -and $r.Lines[1] -eq $wroteLine } -Shown "exit $($r.Exit), $($r.Lines.Count) line(s): $($r.Lines -join ' | ')"
+
     # ---- a severity change on an id untested in the baseline --------------
     # TheHub #61473: severity_changed required the id to be open in BOTH runs,
     # so an id that was untested last run and is open this run at a different
