@@ -223,7 +223,8 @@ try {
             & {
                 # Parses like the real cmdlet; fails like 5.1, with the text in the message.
                 function ConvertFrom-Json {
-                    param([Parameter(ValueFromPipeline = $true)][object]$InputObject)
+                    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidOverwritingBuiltInCmdlets', '', Justification = 'Deliberate test double for the 5.1 parser, scoped to this block')]
+                    param([object]$InputObject)
                     try { Microsoft.PowerShell.Utility\ConvertFrom-Json -InputObject $InputObject }
                     catch { throw [System.ArgumentException]::new("Invalid JSON primitive: $InputObject.") }
                 }

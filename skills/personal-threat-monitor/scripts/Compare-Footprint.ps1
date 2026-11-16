@@ -22,8 +22,9 @@
 
   Exit codes:
     0  compared; footprint-diff.json written
-    2  either footprint.json is missing, not JSON, or fails the contract. The first failing
-       JSON path is printed and nothing is written.
+    2  either footprint.json is missing, not JSON, or fails the contract. The file and the
+       first failing JSON path are printed, never the file's content (TheHub #61473), and
+       nothing is written.
 .PARAMETER Baseline
   The previous run's folder, for example personal-monitor\2026-10-11.
 .PARAMETER Current
@@ -56,7 +57,14 @@ function Read-Footprint([string]$Dir) {
   if (-not (Test-Path -LiteralPath $file -PathType Leaf)) { Stop-Invalid $file '$: file not found' }
   $text = [IO.File]::ReadAllText((Resolve-Path -LiteralPath $file).Path)
   $doc = $null
-  try { $doc = ConvertFrom-Json -InputObject $text } catch { Stop-Invalid $file "`$: not valid JSON ($($_.Exception.Message -replace '\s+', ' '))" }
+  # Never print the parser's message: on Windows PowerShell 5.1 it is "Invalid JSON
+  # primitive: <the rest of the file>", which put the owner's exposure summaries in the
+  # run log (TheHub #61473). Keep only a line/position when pwsh 7 gives one.
+  try { $doc = ConvertFrom-Json -InputObject $text } catch {
+    $where = ''
+    if ("$($_.Exception.Message)" -match 'line (\d+), position (\d+)') { $where = " near line $($Matches[1]), position $($Matches[2])" }
+    Stop-Invalid $file "`$: not valid JSON$where"
+  }
   $why = Test-FootprintDocument -Document $doc
   if ($why) { Stop-Invalid $file $why }
   return $doc
