@@ -32,9 +32,9 @@ fields:
   required_signatures:
     value: false
     reason: >-
-      TheHub #61738: off on main before this change and not part of the decided
-      protection body. Turning it on is the operator's call; flip this to true
-      in the same change.
+      TheHub #61739, estate exception E9: off on main, and whether to require
+      signed commits is an open operator decision. Flip this to true in the
+      same change that turns it on.
   required_linear_history:
     value: true
   allow_force_pushes:
