@@ -353,7 +353,7 @@ foreach ($f in Get-ChildItem -LiteralPath $script:SkillRoot -Recurse -Filter '*.
     foreach ($fd in $a2.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true)) {
         $allFuncs += $fd.Name
         $noun = ($fd.Name -split '-', 2)[-1]
-        if ($noun -match 's$' -and $noun -notmatch '(ss|us|is)$') { $pluralFuncs += $fd.Name }
+        if ($fd.Name -match '-' -and $noun -match 's$' -and $noun -notmatch '(ss|us|is)$') { $pluralFuncs += $fd.Name }
     }
 }
 Check -Name "no function in the skill is named with a plural noun" -Test { $pluralFuncs.Count -eq 0 } -Shown ($pluralFuncs -join ',')
