@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Get-NewBreaches.ps1 and Select-NewBreaches against a fixture catalogue.
+    Get-NewBreaches.ps1 and Select-NewBreach against a fixture catalogue.
     No network, no API key.
 
 .DESCRIPTION
@@ -9,7 +9,7 @@
     account domains. Two things are pinned here:
 
       - the matching rule, by calling the dot-sourced pure functions
-        (Select-NewBreaches, ConvertTo-AccountDomains) on fixture data
+        (Select-NewBreach, ConvertTo-AccountDomain) on fixture data
       - what the script sends and what it decides, by running it for real with
         Invoke-WebRequest replaced by a function in this scope (PowerShell
         resolves a function before a cmdlet of the same name, and a child
@@ -129,10 +129,10 @@ $domains = @('example.com', 'example.net')
 try {
     # ------------------------------------------------------------------------
     Write-Host ""
-    Write-Host "the matching rule (Select-NewBreaches, pure)"
+    Write-Host "the matching rule (Select-NewBreach, pure)"
 
-    $have = [bool](Get-Command -Name Select-NewBreaches -CommandType Function -ErrorAction SilentlyContinue)
-    Check -Name "scripts/Select-NewBreaches.ps1 defines Select-NewBreaches" -Test { $have } -Shown $script:Functions
+    $have = [bool](Get-Command -Name Select-NewBreach -CommandType Function -ErrorAction SilentlyContinue)
+    Check -Name "scripts/Select-NewBreaches.ps1 defines Select-NewBreach" -Test { $have } -Shown $script:Functions
 
     $since = [datetime]'2026-10-20'
     $cat = @(
@@ -145,7 +145,7 @@ try {
         (Row -Name 'DayBefore' -Domain 'example.com' -Added '2026-10-19'),
         (Row -Name 'NoDomain' -Domain '' -Added '2026-10-25')
     )
-    $hits = @(Select-NewBreaches -Catalogue $cat -Domains $domains -Since $since)
+    $hits = @(Select-NewBreach -Catalogue $cat -Domains $domains -Since $since)
     $names = @($hits | ForEach-Object { $_.name })
     $shown = $names -join ','
 
@@ -159,10 +159,10 @@ try {
     Check -Name "a breach with no Domain never matches" -Test { $names -notcontains 'NoDomain' } -Shown $shown
     Check -Name "exactly the four expected rows" -Test { $names.Count -eq 4 } -Shown $shown
 
-    $mixed = @(Select-NewBreaches -Catalogue $cat -Domains @('Example.COM') -Since $since)
+    $mixed = @(Select-NewBreach -Catalogue $cat -Domains @('Example.COM') -Since $since)
     Check -Name "a listed domain in mixed case still matches" -Test { @($mixed | ForEach-Object { $_.name }) -contains 'Exact' } -Shown (@($mixed | ForEach-Object { $_.name }) -join ',')
 
-    $empty = @(Select-NewBreaches -Catalogue @() -Domains $domains -Since $since)
+    $empty = @(Select-NewBreach -Catalogue @() -Domains $domains -Since $since)
     Check -Name "an empty catalogue gives no rows" -Test { $empty.Count -eq 0 } -Shown "$($empty.Count)"
 
     $one = @($hits | Where-Object { $_.name -eq 'Exact' })[0]
@@ -173,16 +173,16 @@ try {
     # ConvertFrom-Json on PowerShell 7 turns ISO timestamps into [datetime];
     # 5.1 leaves them as strings. Both must land on the same day.
     $parsed = ConvertFrom-Json -InputObject '[{"Name":"Parsed","Domain":"example.com","BreachDate":"2026-01-15","AddedDate":"2026-10-20T00:00:00Z","DataClasses":["Passwords"]},{"Name":"ParsedLate","Domain":"example.com","BreachDate":"2026-01-15","AddedDate":"2026-10-19T23:59:59Z","DataClasses":["Passwords"]}]'
-    $p = @(Select-NewBreaches -Catalogue @($parsed | ForEach-Object { $_ }) -Domains $domains -Since $since)
+    $p = @(Select-NewBreach -Catalogue @($parsed | ForEach-Object { $_ }) -Domains $domains -Since $since)
     $pn = @($p | ForEach-Object { $_.name }) -join ','
     Check -Name "parsed AddedDate 00:00Z on -Since matches, 23:59Z before does not" -Test { $pn -eq 'Parsed' } -Shown $pn
     Check -Name "data_classes stays an array of one" -Test { $p.Count -eq 1 -and @($p[0].data_classes).Count -eq 1 -and $p[0].data_classes[0] -eq 'Passwords' } -Shown ''
 
     # ------------------------------------------------------------------------
     Write-Host ""
-    Write-Host "the domains list (ConvertTo-AccountDomains, pure)"
+    Write-Host "the domains list (ConvertTo-AccountDomain, pure)"
 
-    $d = @(ConvertTo-AccountDomains -Lines @(
+    $d = @(ConvertTo-AccountDomain -Lines @(
         '# my accounts', '', '  Example.COM  ', 'shop.example.net # store',
         'not a domain', 'https://example.org/login', 'user@example.org', '-bad-.example.com', 'example', 'example.com'
     ))
@@ -288,7 +288,7 @@ try {
     Write-Host "the domains file stays local"
 
     $example = Join-Path -Path $script:SkillRoot -ChildPath 'references/account-domains.example.txt'
-    $exLines = if (Test-Path -LiteralPath $example) { @(ConvertTo-AccountDomains -Lines (Get-Content -LiteralPath $example)) } else { @() }
+    $exLines = if (Test-Path -LiteralPath $example) { @(ConvertTo-AccountDomain -Lines (Get-Content -LiteralPath $example)) } else { @() }
     $notPlaceholder = @($exLines | Where-Object { $_ -notmatch '(^|\.)example\.(com|net|org)$' })
     Check -Name "references/account-domains.example.txt ships placeholders only" -Test { $exLines.Count -gt 0 -and $notPlaceholder.Count -eq 0 } -Shown (($exLines + '|' + $notPlaceholder) -join ',')
 
