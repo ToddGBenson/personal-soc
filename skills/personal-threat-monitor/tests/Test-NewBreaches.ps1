@@ -312,6 +312,34 @@ finally {
     Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue
 }
 
+# ---- no private helper claims a state-changing verb it does not have ----------
+# TheHub #61538. PSUseShouldProcessForStateChangingFunctions flagged the
+# helper that prints UNKNOWN and exits 2 (it changes no system state).
+# AST check: needs no module, so it runs everywhere.
+$ssVerbs = @('New','Set','Remove','Start','Stop','Restart','Reset','Update','Clear','Add','Enable','Disable')
+$tokens = $null; $errs = $null
+$ast = [System.Management.Automation.Language.Parser]::ParseFile($script:GetNewBreaches, [ref]$tokens, [ref]$errs)
+$funcs = $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true)
+$badFuncs = @($funcs | Where-Object {
+    $verb = ($_.Name -split '-')[0]
+    $hasSp = $false
+    if ($_.Body.ParamBlock) {
+        foreach ($a in $_.Body.ParamBlock.Attributes) {
+            foreach ($na in $a.NamedArguments) { if ($na.ArgumentName -eq 'SupportsShouldProcess') { $hasSp = $true } }
+        }
+    }
+    ($ssVerbs -contains $verb) -and -not $hasSp
+} | ForEach-Object { $_.Name })
+Check -Name "no function uses a ShouldProcess verb without SupportsShouldProcess" -Test { $badFuncs.Count -eq 0 } -Shown ($badFuncs -join ',')
+Check -Name "the exit-2 helper is named Exit-Unknown" -Test { ($funcs | Where-Object { $_.Name -eq 'Exit-Unknown' }) -and -not ($funcs | Where-Object { $_.Name -eq 'Stop-Unknown' }) } -Shown (($funcs | ForEach-Object { $_.Name }) -join ',')
+
+if (Get-Module -ListAvailable -Name PSScriptAnalyzer) {
+    $psa = @(Invoke-ScriptAnalyzer -Path $script:GetNewBreaches -IncludeRule PSUseShouldProcessForStateChangingFunctions)
+    Check -Name "PSScriptAnalyzer PSUseShouldProcessForStateChangingFunctions is clean" -Test { $psa.Count -eq 0 } -Shown (($psa | ForEach-Object { $_.Message }) -join '; ')
+} else {
+    Write-Host "  SKIP  PSScriptAnalyzer module not installed; analyzer check did not run (AST check above still ran)"
+}
+
 Write-Host ""
 if ($fail -eq 0) {
     Write-Host "  $pass passed, 0 failed"
