@@ -340,6 +340,32 @@ if (Get-Module -ListAvailable -Name PSScriptAnalyzer) {
     Write-Host "  SKIP  PSScriptAnalyzer module not installed; analyzer check did not run (AST check above still ran)"
 }
 
+# ---- singular nouns (TheHub #61513) ----------------------------------------
+# Every function in the skill's scripts names a singular noun. The AST check
+# runs without the module; the analyzer check runs when PSScriptAnalyzer is
+# installed. File names are not checked: the Skill Install task never deletes,
+# so a renamed file would be installed next to the old one.
+$pluralFuncs = @()
+$allFuncs = @()
+foreach ($f in Get-ChildItem -LiteralPath $script:SkillRoot -Recurse -Filter '*.ps1' -File) {
+    $t2 = $null; $e2 = $null
+    $a2 = [System.Management.Automation.Language.Parser]::ParseFile($f.FullName, [ref]$t2, [ref]$e2)
+    foreach ($fd in $a2.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true)) {
+        $allFuncs += $fd.Name
+        $noun = ($fd.Name -split '-', 2)[-1]
+        if ($noun -match 's$' -and $noun -notmatch '(ss|us|is)$') { $pluralFuncs += $fd.Name }
+    }
+}
+Check -Name "no function in the skill is named with a plural noun" -Test { $pluralFuncs.Count -eq 0 } -Shown ($pluralFuncs -join ',')
+Check -Name "the old plural function names are gone" -Test { -not ($allFuncs -contains 'Select-NewBreaches') -and -not ($allFuncs -contains 'ConvertTo-AccountDomains') } -Shown ($allFuncs -join ',')
+
+if (Get-Module -ListAvailable -Name PSScriptAnalyzer) {
+    $psn = @(Invoke-ScriptAnalyzer -Path $script:SkillRoot -Recurse -IncludeRule PSUseSingularNouns)
+    Check -Name "PSScriptAnalyzer PSUseSingularNouns is clean" -Test { $psn.Count -eq 0 } -Shown (($psn | ForEach-Object { $_.Message }) -join '; ')
+} else {
+    Write-Host "  SKIP  PSScriptAnalyzer module not installed; PSUseSingularNouns analyzer check did not run (AST check above still ran)"
+}
+
 Write-Host ""
 if ($fail -eq 0) {
     Write-Host "  $pass passed, 0 failed"
