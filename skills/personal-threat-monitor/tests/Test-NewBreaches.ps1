@@ -126,6 +126,10 @@ function Invoke-Under([hashtable]$Params) {
 
 $domains = @('example.com', 'example.net')
 
+# True when the script's printed output carries the literal text (Exit-Unknown
+# prints 'UNKNOWN: <why>' with Write-Host, which Invoke-Under captures).
+function Say($r, [string]$Text) { return ([string]$r.Output).Contains($Text) }
+
 try {
     # ------------------------------------------------------------------------
     Write-Host ""
@@ -254,34 +258,39 @@ try {
     ClearFake
     $FakeHibpThrow = $true
     $r = Invoke-Under -Params @{ DomainsFile = $df; Since = '2026-10-20' }
-    Check -Name "a failed request exits 2" -Test { -not $r.Threw -and $r.Exit -eq 2 -and -not $r.Wrote } -Shown "$($r.Exit) wrote=$($r.Wrote)"
+    Check -Name "a failed request exits 2 with the UNKNOWN text" -Test { -not $r.Threw -and $r.Exit -eq 2 -and -not $r.Wrote -and (Say $r 'UNKNOWN: GET https://haveibeenpwned.com/api/v3/breaches failed: fake HIBP: 503 Service Unavailable') } -Shown "$($r.Exit) wrote=$($r.Wrote) $($r.Output)"
 
     ClearFake
     $FakeHibpBody = '{"Name":"NotAnArray","Domain":"example.com","AddedDate":"2026-10-25T00:00:00Z"}'
     $r = Invoke-Under -Params @{ DomainsFile = $df; Since = '2026-10-20' }
-    Check -Name "a JSON object, not an array, exits 2" -Test { $r.Exit -eq 2 -and -not $r.Wrote } -Shown "$($r.Exit) wrote=$($r.Wrote)"
+    Check -Name "a JSON object, not an array, exits 2 with the UNKNOWN text" -Test { $r.Exit -eq 2 -and -not $r.Wrote -and (Say $r 'UNKNOWN: the catalogue response is not a JSON array.') } -Shown "$($r.Exit) wrote=$($r.Wrote) $($r.Output)"
 
     ClearFake
     $FakeHibpBody = '<html><body>Just a moment...</body></html>'
     $r = Invoke-Under -Params @{ DomainsFile = $df; Since = '2026-10-20' }
-    Check -Name "an HTML page exits 2" -Test { $r.Exit -eq 2 -and -not $r.Wrote } -Shown "$($r.Exit) wrote=$($r.Wrote)"
+    Check -Name "an HTML page exits 2 with the UNKNOWN text" -Test { $r.Exit -eq 2 -and -not $r.Wrote -and (Say $r 'UNKNOWN: the catalogue response is not a JSON array.') } -Shown "$($r.Exit) wrote=$($r.Wrote) $($r.Output)"
 
     ClearFake
     $FakeHibpBody = ''
     $r = Invoke-Under -Params @{ DomainsFile = $df; Since = '2026-10-20' }
-    Check -Name "an empty body exits 2" -Test { $r.Exit -eq 2 -and -not $r.Wrote } -Shown "$($r.Exit) wrote=$($r.Wrote)"
+    Check -Name "an empty body exits 2 with the UNKNOWN text" -Test { $r.Exit -eq 2 -and -not $r.Wrote -and (Say $r 'UNKNOWN: the catalogue response is not a JSON array.') } -Shown "$($r.Exit) wrote=$($r.Wrote) $($r.Output)"
+
+    ClearFake
+    $FakeHibpBody = '[this is not json'
+    $r = Invoke-Under -Params @{ DomainsFile = $df; Since = '2026-10-20' }
+    Check -Name "a body starting with [ that is not valid JSON exits 2" -Test { $r.Exit -eq 2 -and -not $r.Wrote -and $FakeHibpCalls.Count -eq 1 -and (Say $r 'UNKNOWN: the catalogue response is not valid JSON:') } -Shown "$($r.Exit) wrote=$($r.Wrote) $($r.Output)"
 
     ClearFake
     $r = Invoke-Under -Params @{ DomainsFile = (Join-Path -Path $tmp -ChildPath 'missing.txt'); Since = '2026-10-20' }
-    Check -Name "a missing domains file exits 2 before any request" -Test { $r.Exit -eq 2 -and $FakeHibpCalls.Count -eq 0 -and -not $r.Wrote } -Shown "$($r.Exit) calls=$($FakeHibpCalls.Count)"
+    Check -Name "a missing domains file exits 2 before any request" -Test { $r.Exit -eq 2 -and $FakeHibpCalls.Count -eq 0 -and -not $r.Wrote -and (Say $r 'UNKNOWN: domains file not found:') } -Shown "$($r.Exit) calls=$($FakeHibpCalls.Count)"
 
     ClearFake
     $r = Invoke-Under -Params @{ DomainsFile = (DomainsFile -Lines @('# only a comment', '', 'not a domain')); Since = '2026-10-20' }
-    Check -Name "a domains file with no usable domain exits 2" -Test { $r.Exit -eq 2 -and $FakeHibpCalls.Count -eq 0 -and -not $r.Wrote } -Shown "$($r.Exit) calls=$($FakeHibpCalls.Count)"
+    Check -Name "a domains file with no usable domain exits 2" -Test { $r.Exit -eq 2 -and $FakeHibpCalls.Count -eq 0 -and -not $r.Wrote -and (Say $r 'UNKNOWN: domains file has no usable domain:') } -Shown "$($r.Exit) calls=$($FakeHibpCalls.Count)"
 
     ClearFake
     $r = Invoke-Under -Params @{ DomainsFile = $df; Since = '20/10/2026' }
-    Check -Name "a -Since that is not yyyy-MM-dd exits 2" -Test { $r.Exit -eq 2 -and $FakeHibpCalls.Count -eq 0 } -Shown "$($r.Exit) calls=$($FakeHibpCalls.Count)"
+    Check -Name "a -Since that is not yyyy-MM-dd exits 2" -Test { $r.Exit -eq 2 -and $FakeHibpCalls.Count -eq 0 -and (Say $r "UNKNOWN: -Since must be yyyy-MM-dd (got '20/10/2026').") } -Shown "$($r.Exit) calls=$($FakeHibpCalls.Count)"
 
     # ------------------------------------------------------------------------
     Write-Host ""
@@ -342,9 +351,11 @@ if (Get-Module -ListAvailable -Name PSScriptAnalyzer) {
 
 # ---- singular nouns (TheHub #61513) ----------------------------------------
 # Every function in the skill's scripts names a singular noun. The AST check
-# runs without the module; the analyzer check runs when PSScriptAnalyzer is
-# installed. File names are not checked: the Skill Install task never deletes,
+# runs only when PSScriptAnalyzer is missing (the analyzer's PSUseSingularNouns
+# is authoritative and the hand-written plural rule disagrees with it both
+# ways); the analyzer check runs when the module is installed. File names are not checked: the Skill Install task never deletes,
 # so a renamed file would be installed next to the old one.
+$haveAnalyzer = [bool](Get-Module -ListAvailable -Name PSScriptAnalyzer)
 $pluralFuncs = @()
 $allFuncs = @()
 foreach ($f in Get-ChildItem -LiteralPath $script:SkillRoot -Recurse -Filter '*.ps1' -File) {
@@ -353,13 +364,17 @@ foreach ($f in Get-ChildItem -LiteralPath $script:SkillRoot -Recurse -Filter '*.
     foreach ($fd in $a2.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true)) {
         $allFuncs += $fd.Name
         $noun = ($fd.Name -split '-', 2)[-1]
-        if ($fd.Name -match '-' -and $noun -match 's$' -and $noun -notmatch '(ss|us|is)$') { $pluralFuncs += $fd.Name }
+        if (-not $haveAnalyzer -and $fd.Name -match '-' -and $noun -match 's$' -and $noun -notmatch '(ss|us|is)$') { $pluralFuncs += $fd.Name }
     }
 }
-Check -Name "no function in the skill is named with a plural noun" -Test { $pluralFuncs.Count -eq 0 } -Shown ($pluralFuncs -join ',')
+if (-not $haveAnalyzer) {
+    Check -Name "no function in the skill is named with a plural noun (AST fallback)" -Test { $pluralFuncs.Count -eq 0 } -Shown ($pluralFuncs -join ',')
+} else {
+    Write-Host "  NOTE  PSScriptAnalyzer installed; the AST plural-noun heuristic did not run (the analyzer check below is authoritative)"
+}
 Check -Name "the old plural function names are gone" -Test { -not ($allFuncs -contains 'Select-NewBreaches') -and -not ($allFuncs -contains 'ConvertTo-AccountDomains') } -Shown ($allFuncs -join ',')
 
-if (Get-Module -ListAvailable -Name PSScriptAnalyzer) {
+if ($haveAnalyzer) {
     $psn = @(Invoke-ScriptAnalyzer -Path $script:SkillRoot -Recurse -IncludeRule PSUseSingularNouns)
     Check -Name "PSScriptAnalyzer PSUseSingularNouns is clean" -Test { $psn.Count -eq 0 } -Shown (($psn | ForEach-Object { $_.Message }) -join '; ')
 } else {
