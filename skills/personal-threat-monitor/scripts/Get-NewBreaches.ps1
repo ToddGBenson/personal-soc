@@ -59,7 +59,7 @@ if (-not [datetime]::TryParseExact($Since, 'yyyy-MM-dd', [Globalization.CultureI
 if (-not (Test-Path -LiteralPath $DomainsFile -PathType Leaf)) {
   Exit-Unknown "domains file not found: $DomainsFile (copy references/account-domains.example.txt to account-domains.local.txt)."
 }
-$domains = @(ConvertTo-AccountDomains -Lines @(Get-Content -LiteralPath $DomainsFile))
+$domains = @(ConvertTo-AccountDomain -Lines @(Get-Content -LiteralPath $DomainsFile))
 if (-not $domains.Count) {
   Exit-Unknown "domains file has no usable domain: $DomainsFile"
 }
@@ -87,7 +87,7 @@ try {
 }
 
 # ---- match locally and write it down ------------------------------------------
-$hits = @(Select-NewBreaches -Catalogue $catalogue -Domains $domains -Since $sinceDay)
+$hits = @(Select-NewBreach -Catalogue $catalogue -Domains $domains -Since $sinceDay)
 
 New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
 $outFile = Join-Path -Path (Resolve-Path -LiteralPath $OutDir).Path -ChildPath 'new-breaches.json'

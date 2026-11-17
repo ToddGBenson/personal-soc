@@ -3,10 +3,10 @@
   Pure functions for the key-free breach watch (Get-NewBreaches.ps1). Dot-source this file.
   Both emit their results one by one; wrap a call in @() to get an array.
 .DESCRIPTION
-  ConvertTo-AccountDomains turns the lines of a domains file into a clean, lower-case,
+  ConvertTo-AccountDomain turns the lines of a domains file into a clean, lower-case,
   de-duplicated list, skipping comments, blanks and anything that is not a bare domain.
 
-  Select-NewBreaches matches HIBP's public breach catalogue (/api/v3/breaches rows:
+  Select-NewBreach matches HIBP's public breach catalogue (/api/v3/breaches rows:
   Name, Domain, BreachDate, AddedDate, DataClasses) against that list. A breach matches
   when its Domain equals a listed domain, case-insensitively, or is a subdomain of one
   (shop.example.com matches example.com; notexample.com does not), and its AddedDate,
@@ -20,7 +20,7 @@
 # One label: letters, digits, inner hyphens. At least two labels, a letter-only TLD.
 $script:AccountDomainPattern = '^(?=.{1,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$'
 
-function ConvertTo-AccountDomains {
+function ConvertTo-AccountDomain {
   [CmdletBinding()]
   [OutputType([string[]])]
   param([AllowEmptyCollection()][AllowEmptyString()][string[]]$Lines)
@@ -55,14 +55,14 @@ function ConvertTo-BreachDay($Value) {
   return $null
 }
 
-function Select-NewBreaches {
+function Select-NewBreach {
   [CmdletBinding()]
   param(
     [AllowEmptyCollection()][object[]]$Catalogue,
     [AllowEmptyCollection()][string[]]$Domains,
     [Parameter(Mandatory)][datetime]$Since
   )
-  $listed = @(ConvertTo-AccountDomains -Lines $Domains)
+  $listed = @(ConvertTo-AccountDomain -Lines $Domains)
   $sinceDay = $Since.Date
   $rows = [System.Collections.Generic.List[object]]::new()
   if (-not $listed.Count) { return }
