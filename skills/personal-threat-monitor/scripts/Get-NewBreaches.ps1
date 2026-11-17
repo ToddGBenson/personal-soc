@@ -45,7 +45,7 @@ $ErrorActionPreference = 'Stop'
 $CatalogueUri = 'https://haveibeenpwned.com/api/v3/breaches'
 $UserAgent = 'personal-soc-breach-watch'
 
-function Stop-Unknown([string]$Why) {
+function Exit-Unknown([string]$Why) {
   Write-Host "UNKNOWN: $Why" -ForegroundColor Yellow
   Write-Host "No breach signal this run; this is not a pass." -ForegroundColor Yellow
   exit 2
@@ -54,14 +54,14 @@ function Stop-Unknown([string]$Why) {
 # ---- inputs, checked before anything leaves the host ------------------------
 $sinceDay = [datetime]::MinValue
 if (-not [datetime]::TryParseExact($Since, 'yyyy-MM-dd', [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::None, [ref]$sinceDay)) {
-  Stop-Unknown "-Since must be yyyy-MM-dd (got '$Since')."
+  Exit-Unknown "-Since must be yyyy-MM-dd (got '$Since')."
 }
 if (-not (Test-Path -LiteralPath $DomainsFile -PathType Leaf)) {
-  Stop-Unknown "domains file not found: $DomainsFile (copy references/account-domains.example.txt to account-domains.local.txt)."
+  Exit-Unknown "domains file not found: $DomainsFile (copy references/account-domains.example.txt to account-domains.local.txt)."
 }
 $domains = @(ConvertTo-AccountDomains -Lines @(Get-Content -LiteralPath $DomainsFile))
 if (-not $domains.Count) {
-  Stop-Unknown "domains file has no usable domain: $DomainsFile"
+  Exit-Unknown "domains file has no usable domain: $DomainsFile"
 }
 
 # ---- the one request: the public catalogue, nothing about the owner ----------
@@ -71,19 +71,19 @@ if ($PSVersionTable.PSVersion.Major -lt 6) {
 try {
   $resp = Invoke-WebRequest -Uri $CatalogueUri -Method Get -UserAgent $UserAgent -TimeoutSec 60 -UseBasicParsing
 } catch {
-  Stop-Unknown "GET $CatalogueUri failed: $($_.Exception.Message)"
+  Exit-Unknown "GET $CatalogueUri failed: $($_.Exception.Message)"
 }
 
 # Parsed here rather than by Invoke-RestMethod, so a JSON object, an HTML challenge page or
 # an empty body is told apart from an empty catalogue.
 $body = [string]$resp.Content
 if (-not $body.TrimStart().StartsWith('[')) {
-  Stop-Unknown "the catalogue response is not a JSON array."
+  Exit-Unknown "the catalogue response is not a JSON array."
 }
 try {
   $catalogue = @(ConvertFrom-Json -InputObject $body | ForEach-Object { $_ })
 } catch {
-  Stop-Unknown "the catalogue response is not valid JSON: $($_.Exception.Message)"
+  Exit-Unknown "the catalogue response is not valid JSON: $($_.Exception.Message)"
 }
 
 # ---- match locally and write it down ------------------------------------------
