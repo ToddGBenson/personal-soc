@@ -282,15 +282,15 @@ try {
 
     ClearFake
     $r = Invoke-Under -Params @{ DomainsFile = (Join-Path -Path $tmp -ChildPath 'missing.txt'); Since = '2026-10-20' }
-    Check -Name "a missing domains file exits 2 before any request" -Test { $r.Exit -eq 2 -and $FakeHibpCalls.Count -eq 0 -and -not $r.Wrote -and (Say $r 'UNKNOWN: domains file not found:') } -Shown "$($r.Exit) calls=$($FakeHibpCalls.Count)"
+    Check -Name "a missing domains file exits 2 before any request" -Test { $r.Exit -eq 2 -and $FakeHibpCalls.Count -eq 0 -and -not $r.Wrote -and (Say $r 'UNKNOWN: domains file not found:') } -Shown "$($r.Exit) calls=$($FakeHibpCalls.Count) $($r.Output)"
 
     ClearFake
     $r = Invoke-Under -Params @{ DomainsFile = (DomainsFile -Lines @('# only a comment', '', 'not a domain')); Since = '2026-10-20' }
-    Check -Name "a domains file with no usable domain exits 2" -Test { $r.Exit -eq 2 -and $FakeHibpCalls.Count -eq 0 -and -not $r.Wrote -and (Say $r 'UNKNOWN: domains file has no usable domain:') } -Shown "$($r.Exit) calls=$($FakeHibpCalls.Count)"
+    Check -Name "a domains file with no usable domain exits 2" -Test { $r.Exit -eq 2 -and $FakeHibpCalls.Count -eq 0 -and -not $r.Wrote -and (Say $r 'UNKNOWN: domains file has no usable domain:') } -Shown "$($r.Exit) calls=$($FakeHibpCalls.Count) $($r.Output)"
 
     ClearFake
     $r = Invoke-Under -Params @{ DomainsFile = $df; Since = '20/10/2026' }
-    Check -Name "a -Since that is not yyyy-MM-dd exits 2" -Test { $r.Exit -eq 2 -and $FakeHibpCalls.Count -eq 0 -and (Say $r "UNKNOWN: -Since must be yyyy-MM-dd (got '20/10/2026').") } -Shown "$($r.Exit) calls=$($FakeHibpCalls.Count)"
+    Check -Name "a -Since that is not yyyy-MM-dd exits 2" -Test { $r.Exit -eq 2 -and $FakeHibpCalls.Count -eq 0 -and (Say $r "UNKNOWN: -Since must be yyyy-MM-dd (got '20/10/2026').") } -Shown "$($r.Exit) calls=$($FakeHibpCalls.Count) $($r.Output)"
 
     # ------------------------------------------------------------------------
     Write-Host ""
@@ -353,8 +353,9 @@ if (Get-Module -ListAvailable -Name PSScriptAnalyzer) {
 # Every function in the skill's scripts names a singular noun. The AST check
 # runs only when PSScriptAnalyzer is missing (the analyzer's PSUseSingularNouns
 # is authoritative and the hand-written plural rule disagrees with it both
-# ways); the analyzer check runs when the module is installed. File names are not checked: the Skill Install task never deletes,
-# so a renamed file would be installed next to the old one.
+# ways); the analyzer check runs when the module is installed. File names are
+# not checked: the Skill Install task never deletes, so a renamed file would be
+# installed next to the old one.
 $haveAnalyzer = [bool](Get-Module -ListAvailable -Name PSScriptAnalyzer)
 $pluralFuncs = @()
 $allFuncs = @()
