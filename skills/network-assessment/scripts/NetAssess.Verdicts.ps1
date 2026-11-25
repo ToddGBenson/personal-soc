@@ -1023,3 +1023,13 @@ function Get-RoeVerdict {
 
     return [pscustomobject]@{ Ok = $true; Reason = "signed $($signed.ToString('yyyy-MM-dd')), expires $($expires.ToString('yyyy-MM-dd')), covers $Cidr" }
 }
+
+function Test-IpInCidr {
+    # $true only when the IPv4 address lies inside the CIDR. Anything that does not parse is $false.
+    param([string]$Ip, [string]$Cidr)
+    if ($Ip -notmatch '^\d{1,3}(\.\d{1,3}){3}$') { return $false }
+    $r = ConvertTo-Ipv4Range $Cidr
+    $a = ConvertTo-Ipv4Range "$Ip/32"
+    if (-not $r -or -not $a) { return $false }
+    return ($a.First -ge $r.First -and $a.Last -le $r.Last)
+}

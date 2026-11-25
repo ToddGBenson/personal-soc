@@ -22,7 +22,7 @@
 
 .NOTES
     Usage: pwsh -NoProfile -File skills/network-assessment/tests/Test-RulesOfEngagement.ps1
-    Also runs under Windows PowerShell 5.1. ASCII only.
+    Also runs under Windows PowerShell 5.1 (CI runs it under Linux pwsh). ASCII only.
 #>
 
 $ErrorActionPreference = 'Stop'
@@ -80,40 +80,70 @@ Check 'an empty In scope list is refused' (Get-RoeVerdict -RoeText (New-Roe -Sco
 Check 'a malformed target CIDR is refused' (Get-RoeVerdict -RoeText (New-Roe) -Cidr 'not-a-cidr' -Today $today).Ok $false
 Check 'a missing target CIDR is refused' (Get-RoeVerdict -RoeText (New-Roe) -Cidr '' -Today $today).Ok $false
 
+Check 'Test-IpInCidr: address inside' (Test-IpInCidr -Ip '192.0.2.7' -Cidr '192.0.2.0/24') $true
+Check 'Test-IpInCidr: address outside' (Test-IpInCidr -Ip '192.168.0.9' -Cidr '192.0.2.0/24') $false
+Check 'Test-IpInCidr: empty address' (Test-IpInCidr -Ip '' -Cidr '192.0.2.0/24') $false
+Check 'Test-IpInCidr: bad cidr' (Test-IpInCidr -Ip '192.0.2.7' -Cidr 'x') $false
+
 Write-Host ""
 Write-Host "Invoke-WeeklyNetworkScan.ps1 refuses before any probe"
-$marker = Join-Path $tmp 'nmap-was-called.txt'
+# Every child run targets TEST-NET-1 (192.0.2.0/24, RFC 5737, never routed), and
+# the child runs in a session where the other network entry points are tripwires,
+# so a regressed gate cannot reach the real LAN or the internet from a test.
+$tgt = '192.0.2.0/24'
+$marker = Join-Path $tmp 'network-was-touched.txt'
 $stub = Join-Path $tmp 'nmap-stub.cmd'
-Set-Content -LiteralPath $stub -Value "@echo off`r`necho called> `"$marker`"`r`nexit 0" -Encoding ASCII
+Set-Content -LiteralPath $stub -Value "@echo off`r`necho nmap> `"$marker`"`r`nexit 0" -Encoding ASCII
 $pwsh = (Get-Process -Id $PID).Path
+$q = { param($s) "'" + ($s -replace "'", "''") + "'" }
 
 function Invoke-Scan([string]$Name, [string]$RoeContent) {
     $root = Join-Path $tmp $Name
     New-Item -ItemType Directory -Force -Path $root | Out-Null
     $roePath = Join-Path $root 'roe.md'
     if ($null -ne $RoeContent) { Set-Content -LiteralPath $roePath -Value $RoeContent -Encoding ASCII }
-    $text = (& $pwsh -NoProfile -File $scan -Cidr '192.168.0.0/24' -Root $root -RoePath $roePath -NmapPath $stub 2>&1 | Out-String)
+    $m = & $q $marker
+    $trip = @('Invoke-RestMethod', 'Invoke-WebRequest', 'net', 'netsh', 'Test-Connection', 'Resolve-DnsName') |
+        ForEach-Object { "function $_ { Set-Content -LiteralPath $m -Value '$_'; throw 'tripwire' }" }
+    $cmd = ($trip -join '; ') + "; & " + (& $q $scan) + " -Cidr $tgt -Root " + (& $q $root) + " -RoePath " + (& $q $roePath) +
+        " -NmapPath " + (& $q $stub) + " -MonitorRoot " + (& $q $root) + "; exit `$LASTEXITCODE"
+    $old = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'   # Windows PowerShell 5.1 turns child stderr under 2>&1 into a terminating error
+    try { $text = (& $pwsh -NoProfile -Command $cmd 2>&1 | Out-String) } finally { $ErrorActionPreference = $old }
     $rc = $LASTEXITCODE
     $log = Join-Path $root 'roe-refusals.log'
+    $audit = Join-Path $root 'roe-audit.log'
     return [pscustomobject]@{
-        Rc = $rc; Text = $text; Root = $root
-        Log = $(if (Test-Path -LiteralPath $log) { Get-Content -LiteralPath $log -Raw } else { '' })
+        Rc = $rc; Text = ($text -replace '\s+', ' ')   # 5.1 wraps error text at console width
+        Log = $(if (Test-Path -LiteralPath $log) { (Get-Content -LiteralPath $log -Raw) -replace '\s+', ' ' } else { '' })
+        Audit = $(if (Test-Path -LiteralPath $audit) { (Get-Content -LiteralPath $audit -Raw) -replace '\s+', ' ' } else { '' })
+        RoePath = $roePath
         DatedDirs = @(Get-ChildItem -LiteralPath $root -Directory -ErrorAction SilentlyContinue).Count
     }
 }
 
 foreach ($case in @(
     @{ N = 'missing';  Roe = $null;                                         Why = 'missing' },
-    @{ N = 'expired';  Roe = (New-Roe -Signed '2026-01-01' -Expires '2026-03-01'); Why = 'expired' },
-    @{ N = 'unsigned'; Roe = (New-Roe -Signed '(date)');                    Why = 'Signed' },
-    @{ N = 'outside';  Roe = (New-Roe -Scope '- trusted 192.168.50.0/24');  Why = 'not covered' }
+    @{ N = 'expired';  Roe = (New-Roe -Signed '2026-01-01' -Expires '2026-03-01' -Scope "- t $tgt"); Why = 'expired' },
+    @{ N = 'unsigned'; Roe = (New-Roe -Signed '(date)' -Scope "- t $tgt");  Why = 'Signed' },
+    @{ N = 'outside';  Roe = (New-Roe -Scope '- t 198.51.100.0/24');        Why = 'not covered' },
+    # A valid RoE for the target, but this host's adapter is not on TEST-NET-1 (or
+    # there is no adapter, as on a Linux runner): the probes would follow the
+    # adapter, so the run is refused.
+    @{ N = 'adapter';  Roe = (New-Roe -Scope "- t $tgt");                   Why = 'local adapter' }
 )) {
     $r = Invoke-Scan $case.N $case.Roe
-    Check "$($case.N) RoE: exit code is non-zero" ($r.Rc -ne 0) $true
+    Check "$($case.N) RoE: exit code is exactly 2" $r.Rc 2
     Check "$($case.N) RoE: reason is on screen" ($r.Text -like "*$($case.Why)*") $true
     Check "$($case.N) RoE: refusal is logged" ($r.Log -like "*$($case.Why)*") $true
-    Check "$($case.N) RoE: nmap stub never called" (Test-Path -LiteralPath $marker) $false
+    Check "$($case.N) RoE: audit log has a REFUSED line with the RoE hash" ($r.Audit -like '*REFUSED*roe_sha256=*') $true
+    Check "$($case.N) RoE: nmap stub and network tripwires never called" (Test-Path -LiteralPath $marker) $false
     Check "$($case.N) RoE: no dated output folder created" $r.DatedDirs 0
+    if ($case.N -eq 'adapter') {
+        $sha = (Get-FileHash -LiteralPath $r.RoePath -Algorithm SHA256).Hash
+        Check 'adapter RoE: audit log carries the file SHA-256' ($r.Audit -like "*roe_sha256=$sha*") $true
+        Check 'adapter RoE: audit log carries the modified time' ($r.Audit -like '*roe_mtime_utc=20*') $true
+    }
 }
 
 Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue

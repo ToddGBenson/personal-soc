@@ -20,31 +20,63 @@ $today = Get-Date -Format 'yyyy-MM-dd'
 # RULES-OF-ENGAGEMENT GATE (TheHub #62304). This scan runs nmap, so it runs only
 # when a signed, in-date RoE covers the target. Fails closed: anything short of
 # a clear yes (missing file, unsigned, expired, target not listed, no network
-# found) logs the reason and exits 2 before a folder is made or a packet sent.
-# Local reads only (nothing is sent); needed here only when no -Cidr was given.
-$cfg = $null; $ip = $null
-if(-not $Cidr){
-  $cfg = Get-NetIPConfiguration | Where-Object { $_.IPv4DefaultGateway -and $_.NetAdapter.Status -eq 'Up' } | Select-Object -First 1
-  $ip  = $cfg.IPv4Address.IPAddress
-  if($ip){ $Cidr = ($ip -replace '\.\d+$','.0') + '/24' }
-}
-$roeText = $null
-if(Test-Path -LiteralPath $RoePath){ $roeText = Get-Content -LiteralPath $RoePath -Raw -ErrorAction SilentlyContinue }
+# found, the local adapter not on the checked network) logs the reason and
+# exits 2 before a folder is made or a packet sent.
+# Every run, allowed or refused, appends the RoE file's SHA-256 and modified
+# time to roe-audit.log beside the verdict, so an edited RoE shows up.
 . "$PSScriptRoot/NetAssess.Verdicts.ps1"
-$roe = Get-RoeVerdict -RoeText $roeText -Cidr $Cidr -Today (Get-Date)
-if(-not $roe.Ok){
-  $msg = "REFUSED: no scan ($($roe.Reason)). RoE file: $RoePath"
+function Get-LocalAdapter {
+  # Local read only; nothing is sent. $null when there is no usable adapter
+  # (or no Get-NetIPConfiguration, as on a Linux test runner).
+  try {
+    Get-NetIPConfiguration -ErrorAction Stop | Where-Object { $_.IPv4DefaultGateway -and $_.NetAdapter.Status -eq 'Up' } | Select-Object -First 1
+  } catch { $null }
+}
+$roeText = $null; $roeSha = 'none'; $roeMtime = 'none'
+if(Test-Path -LiteralPath $RoePath){
+  $roeText = Get-Content -LiteralPath $RoePath -Raw -ErrorAction SilentlyContinue
+  try {
+    $roeSha = (Get-FileHash -LiteralPath $RoePath -Algorithm SHA256 -ErrorAction Stop).Hash
+    $roeMtime = (Get-Item -LiteralPath $RoePath).LastWriteTimeUtc.ToString('yyyy-MM-ddTHH:mm:ssZ')
+  } catch { $roeSha = 'unreadable' }
+}
+function Write-RoeAudit([string]$Verdict, [string]$Why) {
   New-Item -ItemType Directory -Force -Path $Root | Out-Null
-  Add-Content -LiteralPath (Join-Path $Root 'roe-refusals.log') -Value ("{0}  {1}" -f (Get-Date -Format 'yyyy-MM-dd HH:mm'), $msg)
+  $line = "{0}  {1}  cidr={2}  roe_sha256={3}  roe_mtime_utc={4}  {5}" -f (Get-Date -Format 'yyyy-MM-dd HH:mm'), $Verdict, $Cidr, $roeSha, $roeMtime, $Why
+  Add-Content -LiteralPath (Join-Path $Root 'roe-audit.log') -Value $line
+  return $line
+}
+function Stop-Refused([string]$Why) {
+  $msg = "REFUSED: no scan ($Why). RoE file: $RoePath"
+  $line = Write-RoeAudit 'REFUSED' $Why
+  Add-Content -LiteralPath (Join-Path $Root 'roe-refusals.log') -Value $line
   Write-Error $msg
   exit 2
 }
-Write-Host "RoE ok: $($roe.Reason)"
 
+$cfg = $null; $ip = $null
+if(-not $Cidr){
+  $cfg = Get-LocalAdapter
+  $ip  = $cfg.IPv4Address.IPAddress
+  if($ip){ $Cidr = ($ip -replace '\.\d+$','.0') + '/24' }
+}
+$roe = Get-RoeVerdict -RoeText $roeText -Cidr $Cidr -Today (Get-Date)
+if(-not $roe -or -not $roe.Ok){ Stop-Refused $(if($roe){ $roe.Reason } else { 'the RoE check did not return a verdict' }) }
+
+# The NAS probes, net view and SSDP below go to the local adapter's network,
+# not to $Cidr. So the adapter must be inside the target the RoE was checked
+# against, or an explicit -Cidr could aim the checked range at one LAN while
+# the probes hit another.
 if(-not $cfg){
-  $cfg = Get-NetIPConfiguration | Where-Object { $_.IPv4DefaultGateway -and $_.NetAdapter.Status -eq 'Up' } | Select-Object -First 1
+  $cfg = Get-LocalAdapter
   $ip  = $cfg.IPv4Address.IPAddress
 }
+if(-not $ip -or -not (Test-IpInCidr -Ip $ip -Cidr $Cidr)){
+  Stop-Refused "the local adapter ($(if($ip){ $ip } else { 'none found' })) is not inside the checked target $Cidr, and the probes follow the adapter"
+}
+$null = Write-RoeAudit 'ALLOWED' $roe.Reason
+Write-Host "RoE ok: $($roe.Reason)"
+
 $out = Join-Path $Root $today
 New-Item -ItemType Directory -Force -Path $out, "$out\raw" | Out-Null
 $nasGuess = ($ip -replace '\.\d+$','.5')   # NAS default; adjust if moved
