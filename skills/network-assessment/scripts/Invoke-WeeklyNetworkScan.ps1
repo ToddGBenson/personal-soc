@@ -8,19 +8,45 @@
 param(
   [string]$Cidr,
   [string]$Root = (Join-Path $env:USERPROFILE 'netassess'),
+  # The signed rules of engagement (TheHub #62304). No valid file, no packets.
+  [string]$RoePath = (Join-Path (Join-Path $env:USERPROFILE 'netassess') 'roe.md'),
   [string]$NmapPath = "C:\Program Files (x86)\Nmap\nmap.exe",
   # The Weekly Threat Monitor's output folder (TheHub #60988).
   [string]$MonitorRoot = (Join-Path $env:USERPROFILE 'personal-soc\personal-monitor')
 )
 $ErrorActionPreference = 'Continue'
 $today = Get-Date -Format 'yyyy-MM-dd'
+
+# RULES-OF-ENGAGEMENT GATE (TheHub #62304). This scan runs nmap, so it runs only
+# when a signed, in-date RoE covers the target. Fails closed: anything short of
+# a clear yes (missing file, unsigned, expired, target not listed, no network
+# found) logs the reason and exits 2 before a folder is made or a packet sent.
+# Local reads only (nothing is sent); needed here only when no -Cidr was given.
+$cfg = $null; $ip = $null
+if(-not $Cidr){
+  $cfg = Get-NetIPConfiguration | Where-Object { $_.IPv4DefaultGateway -and $_.NetAdapter.Status -eq 'Up' } | Select-Object -First 1
+  $ip  = $cfg.IPv4Address.IPAddress
+  if($ip){ $Cidr = ($ip -replace '\.\d+$','.0') + '/24' }
+}
+$roeText = $null
+if(Test-Path -LiteralPath $RoePath){ $roeText = Get-Content -LiteralPath $RoePath -Raw -ErrorAction SilentlyContinue }
+. "$PSScriptRoot/NetAssess.Verdicts.ps1"
+$roe = Get-RoeVerdict -RoeText $roeText -Cidr $Cidr -Today (Get-Date)
+if(-not $roe.Ok){
+  $msg = "REFUSED: no scan ($($roe.Reason)). RoE file: $RoePath"
+  New-Item -ItemType Directory -Force -Path $Root | Out-Null
+  Add-Content -LiteralPath (Join-Path $Root 'roe-refusals.log') -Value ("{0}  {1}" -f (Get-Date -Format 'yyyy-MM-dd HH:mm'), $msg)
+  Write-Error $msg
+  exit 2
+}
+Write-Host "RoE ok: $($roe.Reason)"
+
+if(-not $cfg){
+  $cfg = Get-NetIPConfiguration | Where-Object { $_.IPv4DefaultGateway -and $_.NetAdapter.Status -eq 'Up' } | Select-Object -First 1
+  $ip  = $cfg.IPv4Address.IPAddress
+}
 $out = Join-Path $Root $today
 New-Item -ItemType Directory -Force -Path $out, "$out\raw" | Out-Null
-
-# auto-detect LAN
-$cfg = Get-NetIPConfiguration | Where-Object { $_.IPv4DefaultGateway -and $_.NetAdapter.Status -eq 'Up' } | Select-Object -First 1
-$ip  = $cfg.IPv4Address.IPAddress
-if(-not $Cidr){ $Cidr = ($ip -replace '\.\d+$','.0') + '/24' }
 $nasGuess = ($ip -replace '\.\d+$','.5')   # NAS default; adjust if moved
 
 # discovery via the skill's inventory builder
@@ -40,7 +66,6 @@ if($prev -and (Test-Path "$($prev.FullName)\inventory.csv")){
 }
 
 # mechanical NAS checks
-. "$PSScriptRoot/NetAssess.Verdicts.ps1"
 # The ladder that reads this lives in NetAssess.Verdicts.ps1 with fixtures in
 # tests/Test-NfsVerdict.ps1. It is out of here because the only way anybody has
 # ever checked it is by scanning the live LAN -- #8 was validated that way, and
