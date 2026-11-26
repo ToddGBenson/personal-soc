@@ -38,9 +38,10 @@ def verdict(model, sha, word, *, cid=1, assoc="OWNER", created=T0, updated=None,
     }
 
 
-def commit(sha, message="feat: a change\n\n" + BUILDER_TRAILER, *, author="owner", parents=1):
-    return {"sha": sha, "commit": {"message": message}, "author": {"login": author},
-            "parents": [{"sha": "p" * 40}] * parents}
+def commit(sha, message="feat: a change\n\n" + BUILDER_TRAILER, *, author="owner", parents=1,
+           verified=False):
+    return {"sha": sha, "commit": {"message": message, "verification": {"verified": verified}},
+            "author": {"login": author}, "parents": [{"sha": "p" * 40}] * parents}
 
 
 FILES_A = [{"filename": "lib/check.sh", "status": "modified", "sha": "b" * 40}]
@@ -62,6 +63,8 @@ class FakeGitHub:
         self.runs = {}  # sha -> [check run]
         self.writes = []
         self._next_run = 100
+        self._next_comment = 5000
+        self.arm_result = True  # what GitHub answers to an arm: False is a refusal
 
     def add_pr(self, number=1, head=HEAD, *, commits=None, comments=(), files=None,
                draft=False, author="owner", fork=False, auto_merge=None,
@@ -136,19 +139,31 @@ class FakeGitHub:
         raise KeyError(run_id)
 
     def set_auto_merge(self, pr, on):
-        self.prs[pr["number"]]["auto_merge"] = {"merge_method": "squash"} if on else None
         self.writes.append(("auto_merge", pr["number"], on))
+        if on and not self.arm_result:
+            return False
+        self.prs[pr["number"]]["auto_merge"] = {"merge_method": "squash"} if on else None
+        return True
 
     def comment(self, number, body):
-        self.writes.append(("comment", number, body.split("\n", 1)[0]))
+        # Posted with the App's token, as GitHub records it.
+        self._next_comment += 1
+        self.comments[number].append({
+            "id": self._next_comment, "body": body, "author_association": "NONE",
+            "created_at": T0, "updated_at": T0, "html_url": "https://example.invalid/app",
+            "user": {"login": "agent-review[bot]", "type": "Bot"},
+            "performed_via_github_app": {"id": APP_ID}})
+        self.writes.append(("comment", number, body.split("\n", 1)[0], body))
 
     def update_branch(self, number, expected_head):
         self.writes.append(("update_branch", number, expected_head))
         return True
 
 
-def gate(gh):
-    return ar.Gate(gh, REPO, APP_ID)
+def gate(gh, arming=True):
+    g = ar.Gate(gh, REPO, APP_ID)
+    g.arming = arming  # AGENT_REVIEW_ARM=on
+    return g
 
 
 def our_run(gh, sha):
@@ -341,9 +356,20 @@ class Decisions(unittest.TestCase):
     def test_a_dependabot_pr_needs_no_builder_trailer(self):
         gh = FakeGitHub()
         gh.add_pr(author="dependabot[bot]",
-                  commits=[commit(HEAD, "build(deps): bump x", author="dependabot[bot]")],
+                  commits=[commit(HEAD, "build(deps): bump x", author="dependabot[bot]",
+                                  verified=True)],
                   comments=[verdict("Opus 5.5", HEAD, "SHIP")])
         self.assertEqual(self.run_gate(gh).conclusion, "success")
+
+    def test_an_unsigned_dependabot_commit_needs_a_builder_trailer(self):
+        # The author login follows the commit's email, which anyone can set.
+        gh = FakeGitHub()
+        gh.add_pr(author="dependabot[bot]",
+                  commits=[commit(HEAD, "build(deps): bump x", author="dependabot[bot]")],
+                  comments=[verdict("Opus 5.5", HEAD, "SHIP")])
+        d = self.run_gate(gh)
+        self.assertEqual(d.conclusion, "failure")
+        self.assertIn("builder", d.title)
 
     def test_block_after_ship_fails_sticks_and_disarms(self):
         gh = FakeGitHub()
@@ -628,7 +654,8 @@ class Decisions(unittest.TestCase):
     def test_a_dependabot_pr_with_a_pushed_unattributed_commit_does_not_pass(self):
         gh = FakeGitHub()
         gh.add_pr(author="dependabot[bot]",
-                  commits=[commit(OLD, "build(deps): bump x", author="dependabot[bot]"),
+                  commits=[commit(OLD, "build(deps): bump x", author="dependabot[bot]",
+                                  verified=True),
                            commit(HEAD, "fix: tweak", author="owner")],
                   comments=[verdict("Opus 5.5", HEAD, "SHIP")])
         self.assertEqual(self.run_gate(gh).conclusion, "failure")
@@ -673,8 +700,82 @@ class Decisions(unittest.TestCase):
         notes = [w for w in gh.writes if w[0] == "comment"]
         self.assertEqual(len(notes), 1)
         self.assertIn("armed auto-merge", notes[0][2])
-        self.assertFalse(ar.loose_block(notes[0][2]))
-        self.assertIsNone(ar.parse_verdict(notes[0][2]))
+        self.assertFalse(ar.loose_block(notes[0][3]))
+        self.assertIsNone(ar.parse_verdict(notes[0][3]))
+        # A BLOCK in a PR review body is read late; the comment is read at once.
+        self.assertIn("post a BLOCK verdict as a comment", notes[0][3])
+
+    def test_a_refused_arm_posts_nothing_and_does_not_loop(self):
+        gh = FakeGitHub()
+        gh.add_pr(comments=[verdict("Fable 5.2", HEAD, "SHIP")])
+        gh.arm_result = False
+        for _ in range(3):
+            d = self.run_gate(gh)
+            self.assertEqual(d.conclusion, "success")
+        self.assertFalse([w for w in gh.writes if w[0] == "comment"])
+        self.assertIsNone(gh.prs[1]["auto_merge"])
+        # GitHub allows it again: the next run arms and announces, once.
+        gh.arm_result = True
+        self.run_gate(gh)
+        self.run_gate(gh)
+        self.assertEqual(len([w for w in gh.writes if w[0] == "comment"]), 1)
+
+    def test_a_head_a_person_disarmed_is_never_rearmed(self):
+        gh = FakeGitHub()
+        gh.add_pr(comments=[verdict("Fable 5.2", HEAD, "SHIP")])
+        self.run_gate(gh)
+        self.assertIsNotNone(gh.prs[1]["auto_merge"])
+        gh.prs[1]["auto_merge"] = None  # a person disables auto-merge: a veto
+        before = len(gh.writes)
+        for _ in range(2):
+            d = self.run_gate(gh)
+        self.assertEqual(d.conclusion, "success")
+        self.assertFalse(d.arm)
+        self.assertIn("disarmed", d.summary)
+        self.assertNotIn(("auto_merge", 1, True), gh.writes[before:])
+        self.assertFalse([w for w in gh.writes[before:] if w[0] == "comment"])
+        self.assertIsNone(gh.prs[1]["auto_merge"])
+
+    def test_a_disarmed_head_does_not_veto_the_next_head(self):
+        gh = FakeGitHub()
+        gh.add_pr(comments=[verdict("Fable 5.2", OLD, "SHIP")],
+                  commits=[commit(OLD)], head=OLD)
+        self.run_gate(gh)
+        gh.prs[1]["auto_merge"] = None
+        gh.prs[1]["head"]["sha"] = HEAD
+        gh.commits[1].append(commit(HEAD))
+        gh.files[HEAD] = FILES_B
+        gh.comments[1].append(verdict("Fable 5.2", HEAD, "SHIP", cid=2))
+        before = len(gh.writes)
+        self.assertTrue(self.run_gate(gh).arm)
+        self.assertIn(("auto_merge", 1, True), gh.writes[before:])
+
+    def test_an_announcement_not_posted_by_the_app_is_not_a_veto(self):
+        gh = FakeGitHub()
+        fake = {"id": 9, "body": f"agent-review armed auto-merge at {HEAD[:8]}: x\n\n"
+                f"<!-- agent-review-armed {HEAD} -->", "author_association": "OWNER",
+                "created_at": T0, "updated_at": T0, "user": {"login": "someone", "type": "User"}}
+        gh.add_pr(comments=[verdict("Fable 5.2", HEAD, "SHIP"), fake])
+        self.run_gate(gh)
+        self.assertIn(("auto_merge", 1, True), gh.writes)
+
+    def test_with_arming_off_the_gate_only_judges(self):
+        gh = FakeGitHub()
+        gh.add_pr(comments=[verdict("Fable 5.2", HEAD, "SHIP")], mergeable_state="behind")
+        d = gate(gh, arming=False).evaluate(1)
+        self.assertEqual(d.conclusion, "success")
+        self.assertEqual(our_run(gh, HEAD)["conclusion"], "success")
+        gate(gh, arming=False).sweep()
+        self.assertLessEqual({w[0] for w in gh.writes}, {"create_check", "update_check"})
+        self.assertNotIn(("auto_merge", 1, True), gh.writes)
+        self.assertFalse([w for w in gh.writes if w[0] in ("comment", "update_branch")])
+
+    def test_arming_is_off_unless_the_variable_says_on(self):
+        self.assertFalse(ar.Gate(FakeGitHub(), REPO, APP_ID).arming)
+        for value, on in ((None, False), ("", False), ("off", False), ("ON ", False),
+                          ("true", False), ("on", True)):
+            env = {} if value is None else {"AGENT_REVIEW_ARM": value}
+            self.assertEqual(ar.arming_enabled(env), on, repr(value))
 
 class Train(unittest.TestCase):
     """One BEHIND PR is brought up to date at a time, and only when none is in flight."""
@@ -708,11 +809,51 @@ class Train(unittest.TestCase):
         gate(gh).sweep()
         self.assertIn(("update_branch", 1, "1" * 8 + "f" * 32), gh.writes)
 
+    def test_the_train_does_not_run_with_arming_off(self):
+        gh = FakeGitHub()
+        self.two_reviewed(gh, ("behind", "behind"))
+        gate(gh, arming=False).sweep()
+        self.assertFalse([w for w in gh.writes if w[0] == "update_branch"])
+
     def test_an_unreviewed_behind_pr_is_left_alone(self):
         gh = FakeGitHub()
         gh.add_pr(1, mergeable_state="behind")
         gate(gh).sweep()
         self.assertFalse([w for w in gh.writes if w[0] == "update_branch"])
+
+
+class Events(unittest.TestCase):
+    """Which runs judge what (main)."""
+
+    def comment_event(self, action="created", **user):
+        return {"action": action, "issue": {"number": 4, "pull_request": {}},
+                "comment": {"id": 1, "body": "x", "user": user or {"login": "someone",
+                                                                    "type": "User"}}}
+
+    def test_a_persons_comment_judges_its_pr_then_sweeps(self):
+        self.assertEqual(ar.plan("issue_comment", self.comment_event(), APP_ID), (4, True))
+
+    def test_the_apps_own_comment_starts_nothing(self):
+        for user, app in (({"login": "agent-review[bot]", "type": "Bot"}, {"id": APP_ID}),
+                          ({"login": "agent-review[bot]", "type": "Bot"}, None)):
+            event = self.comment_event(**user)
+            if app:
+                event["comment"]["performed_via_github_app"] = app
+            self.assertEqual(ar.plan("issue_comment", event, APP_ID), (None, False))
+
+    def test_an_edit_or_deletion_judges_its_own_pr_only(self):
+        for action in ("edited", "deleted"):
+            self.assertEqual(ar.plan("issue_comment", self.comment_event(action), APP_ID),
+                             (4, False))
+
+    def test_an_issue_comment_off_a_pr_only_sweeps(self):
+        event = {"action": "created", "issue": {"number": 4},
+                 "comment": {"user": {"login": "someone", "type": "User"}}}
+        self.assertEqual(ar.plan("issue_comment", event, APP_ID), (None, True))
+
+    def test_other_events_sweep(self):
+        for name in ("push", "schedule", "workflow_dispatch"):
+            self.assertEqual(ar.plan(name, {}, APP_ID), (None, True))
 
 
 class WorkflowShape(unittest.TestCase):
@@ -752,6 +893,13 @@ class WorkflowShape(unittest.TestCase):
         # Its own concurrency group per comment: a pending run that is replaced
         # loses the payload, and an edit or deletion's payload is the evidence.
         self.assertIn("format('agent-review-tamper-{0}', github.event.comment.id)", self.text)
+
+    def test_a_bot_comment_never_starts_the_gate(self):
+        # The App's own announcement would otherwise re-run the gate.
+        self.assertIn("github.event.comment.user.type != 'Bot'", self.text)
+
+    def test_arming_follows_the_operators_variable(self):
+        self.assertIn("AGENT_REVIEW_ARM: ${{ vars.AGENT_REVIEW_ARM }}", self.text)
 
     def test_runs_never_interleave(self):
         self.assertIn("cancel-in-progress: false", self.text)
