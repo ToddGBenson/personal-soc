@@ -38,12 +38,13 @@ def verdict(model, sha, word, *, cid=1, assoc="OWNER", created=T0, updated=None,
     }
 
 
-def commit(sha, message="feat: a change\n\n" + BUILDER_TRAILER):
-    return {"sha": sha, "commit": {"message": message}}
+def commit(sha, message="feat: a change\n\n" + BUILDER_TRAILER, *, author="owner", parents=1):
+    return {"sha": sha, "commit": {"message": message}, "author": {"login": author},
+            "parents": [{"sha": "p" * 40}] * parents}
 
 
-FILES_A = [{"filename": "hooks/guard.sh", "status": "modified", "sha": "b" * 40}]
-FILES_B = [{"filename": "hooks/guard.sh", "status": "modified", "sha": "c" * 40}]
+FILES_A = [{"filename": "lib/check.sh", "status": "modified", "sha": "b" * 40}]
+FILES_B = [{"filename": "lib/check.sh", "status": "modified", "sha": "c" * 40}]
 
 
 class FakeGitHub:
@@ -54,6 +55,10 @@ class FakeGitHub:
         self.commits = {}
         self.comments = {}
         self.files = {}  # sha -> compare files against the base
+        self.bases = {}  # sha -> its merge base with main (default "base0")
+        self.drift = {}  # (old base, new base) -> files main changed between them
+        self.modes = {}  # sha -> {path: mode}; missing sha means every mode 100644
+        self.reviews = {}  # number -> PR reviews
         self.runs = {}  # sha -> [check run]
         self.writes = []
         self._next_run = 100
@@ -75,6 +80,7 @@ class FakeGitHub:
         }
         self.commits[number] = list(commits if commits is not None else [commit(head)])
         self.comments[number] = list(comments)
+        self.reviews[number] = []
         self.files.setdefault(head, list(FILES_A if files is None else files))
         return self.prs[number]
 
@@ -91,8 +97,21 @@ class FakeGitHub:
     def issue_comments(self, number):
         return list(self.comments[number])
 
-    def compare_files(self, base, sha):
-        return self.files.get(sha)
+    def compare(self, base, sha):
+        if (base, sha) in self.drift:
+            files = self.drift[(base, sha)]
+            return None if files is None else {"files": files, "merge_base": base}
+        files = self.files.get(sha)
+        return None if files is None else {"files": files,
+                                           "merge_base": self.bases.get(sha, "base0")}
+
+    def tree_modes(self, sha):
+        if sha in self.modes:
+            return self.modes[sha]
+        return {f["filename"]: "100644" for f in self.files.get(sha) or []}
+
+    def pr_reviews(self, number):
+        return list(self.reviews.get(number, []))
 
     def check_runs(self, sha):
         return list(self.runs.get(sha, []))
@@ -119,6 +138,9 @@ class FakeGitHub:
     def set_auto_merge(self, pr, on):
         self.prs[pr["number"]]["auto_merge"] = {"merge_method": "squash"} if on else None
         self.writes.append(("auto_merge", pr["number"], on))
+
+    def comment(self, number, body):
+        self.writes.append(("comment", number, body.split("\n", 1)[0]))
 
     def update_branch(self, number, expected_head):
         self.writes.append(("update_branch", number, expected_head))
@@ -166,6 +188,27 @@ class VerdictLine(unittest.TestCase):
         ]
         for body in forged:
             self.assertIsNone(ar.parse_verdict(body), repr(body))
+
+    def test_the_model_field_is_plain_ascii(self):
+        good = f"**Independent review (Fable 5.2) at {HEAD[:8]}: SHIP**"
+        for model in ("<!-- Fable 5.2", "F\u0430ble 5.2", "Fable 5.2 -->", "Fable;5.2", "Fable\t5.2"):
+            body = good.replace("Fable 5.2", model)
+            self.assertIsNone(ar.parse_verdict(body), repr(model))
+        self.assertIsNotNone(ar.parse_verdict(good.replace("Fable 5.2", "claude-fable_5.2")))
+
+    def test_a_loose_block_line_is_recognised(self):
+        for body in (f"**Independent review (Fable 5.2) at {HEAD[:12]}: BLOCK**",
+                     f"**Independent review (Fable 5.2) at {HEAD[:8]}: BLOCK** ",
+                     f"\ufeff**Independent review (Fable 5.2) at {HEAD[:8]}: BLOCK**",
+                     f"\n\n## Independent review (Fable 5.2) at {HEAD[:8]}: BLOCK",
+                     f"Independent review at {HEAD}: BLOCK"):
+            self.assertTrue(ar.loose_block(body), repr(body))
+        self.assertFalse(ar.loose_block("LGTM\nIndependent review: BLOCK"))
+        self.assertFalse(ar.loose_block(f"**Independent review (Fable 5.2) at {HEAD[:8]}: SHIP**"))
+
+    def test_a_bare_claude_trailer_is_every_model(self):
+        self.assertEqual(ar.builder_models(["x\n\nCo-Authored-By: Claude <noreply@anthropic.com>"]), {""})
+        self.assertTrue(ar.same_model("", "fable-5-2"))
 
     def test_builder_models_come_from_claude_trailers(self):
         msgs = ["x\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>",
@@ -241,7 +284,7 @@ class Decisions(unittest.TestCase):
         gh = FakeGitHub()
         gh.files[OLD] = FILES_A
         gh.files[MERGED] = FILES_A  # main merged in, the PR's change untouched
-        gh.add_pr(head=MERGED, commits=[commit(OLD), commit(MERGED, "Merge branch 'main'")],
+        gh.add_pr(head=MERGED, commits=[commit(OLD), commit(MERGED, "Merge branch 'main'", parents=2)],
                   comments=[verdict("Fable 5.2", OLD, "SHIP")])
         self.assertEqual(self.run_gate(gh).conclusion, "success")
 
@@ -297,7 +340,8 @@ class Decisions(unittest.TestCase):
 
     def test_a_dependabot_pr_needs_no_builder_trailer(self):
         gh = FakeGitHub()
-        gh.add_pr(author="dependabot[bot]", commits=[commit(HEAD, "build(deps): bump x")],
+        gh.add_pr(author="dependabot[bot]",
+                  commits=[commit(HEAD, "build(deps): bump x", author="dependabot[bot]")],
                   comments=[verdict("Opus 5.5", HEAD, "SHIP")])
         self.assertEqual(self.run_gate(gh).conclusion, "success")
 
@@ -349,7 +393,7 @@ class Decisions(unittest.TestCase):
         self.run_gate(gh)
         gh.comments[1] = gh.comments[1][:1]  # the BLOCK is deleted
         gh.prs[1]["head"]["sha"] = MERGED
-        gh.commits[1] = [commit(OLD), commit(MERGED, "Merge branch 'main'")]
+        gh.commits[1] = [commit(OLD), commit(MERGED, "Merge branch 'main'", parents=2)]
         self.assertEqual(self.run_gate(gh).conclusion, "failure")
 
     def test_a_new_push_after_ship_needs_a_new_review(self):
@@ -461,6 +505,177 @@ class Decisions(unittest.TestCase):
         self.assertFalse(self.run_gate(gh).arm)
 
 
+    # -- rework after review (TheHub #62342) --------------------------------------
+
+    def test_a_hand_merge_that_undoes_mains_change_does_not_carry(self):
+        # Fable's scratch repository: the PR edits a file, main fixes the same
+        # file, and main is merged in with the conflict resolved "ours". The
+        # PR's resulting blob is unchanged, so only the base side shows it.
+        gh = FakeGitHub()
+        gh.files[OLD] = FILES_A
+        gh.files[MERGED] = FILES_A
+        gh.bases[OLD], gh.bases[MERGED] = "base1", "base2"
+        gh.drift[("base1", "base2")] = [{"filename": "lib/check.sh", "status": "modified",
+                                         "sha": "f" * 40}]
+        gh.add_pr(head=MERGED, commits=[commit(OLD), commit(MERGED, "Merge branch 'main'", parents=2)],
+                  comments=[verdict("Fable 5.2", OLD, "SHIP")])
+        self.assertIsNone(self.run_gate(gh).conclusion)
+
+    def test_a_merge_of_main_that_touched_other_files_carries(self):
+        gh = FakeGitHub()
+        gh.files[OLD] = FILES_A
+        gh.files[MERGED] = FILES_A
+        gh.bases[OLD], gh.bases[MERGED] = "base1", "base2"
+        gh.drift[("base1", "base2")] = [{"filename": "docs/x.md", "status": "modified",
+                                         "sha": "f" * 40}]
+        gh.add_pr(head=MERGED, commits=[commit(OLD), commit(MERGED, "Merge branch 'main'", parents=2)],
+                  comments=[verdict("Fable 5.2", OLD, "SHIP")])
+        self.assertEqual(self.run_gate(gh).conclusion, "success")
+
+    def test_an_unknown_base_drift_does_not_carry(self):
+        for drift in (None, [{"filename": f"f{i}", "status": "added", "sha": "f" * 40}
+                             for i in range(300)]):
+            gh = FakeGitHub()
+            gh.files[OLD] = FILES_A
+            gh.files[MERGED] = FILES_A
+            gh.bases[OLD], gh.bases[MERGED] = "base1", "base2"
+            gh.drift[("base1", "base2")] = drift
+            gh.add_pr(head=MERGED, commits=[commit(OLD), commit(MERGED, "m", parents=2)],
+                      comments=[verdict("Fable 5.2", OLD, "SHIP")])
+            self.assertIsNone(self.run_gate(gh).conclusion)
+
+    def test_a_mode_change_does_not_carry(self):
+        gh = FakeGitHub()
+        gh.files[OLD] = FILES_A
+        gh.files[MERGED] = FILES_A
+        gh.modes[OLD] = {"lib/check.sh": "100644"}
+        gh.modes[MERGED] = {"lib/check.sh": "100755"}
+        gh.add_pr(head=MERGED, commits=[commit(OLD), commit(MERGED)],
+                  comments=[verdict("Fable 5.2", OLD, "SHIP")])
+        self.assertIsNone(self.run_gate(gh).conclusion)
+
+    def test_an_unknown_tree_does_not_carry(self):
+        gh = FakeGitHub()
+        gh.files[OLD] = FILES_A
+        gh.files[MERGED] = FILES_A
+        gh.modes[OLD] = gh.modes[MERGED] = None  # e.g. both trees truncated
+        gh.add_pr(head=MERGED, commits=[commit(OLD), commit(MERGED)],
+                  comments=[verdict("Fable 5.2", OLD, "SHIP")])
+        self.assertIsNone(self.run_gate(gh).conclusion)
+
+    def test_a_malformed_block_fails_a_ship(self):
+        for line in (f"**Independent review (Fable 5.2) at {HEAD[:12]}: BLOCK**",
+                     f"**Independent review (Fable 5.2) at {HEAD[:8]}: BLOCK** ",
+                     f"\ufeff**Independent review (Fable 5.2) at {HEAD[:8]}: BLOCK**",
+                     f"\n## Independent review (Fable 5.2) at {HEAD[:8]}: BLOCK",
+                     "**Independent review (Fable 5.2): BLOCK**"):
+            gh = FakeGitHub()
+            block = {**verdict("Fable 5.2", HEAD, "SHIP", cid=2), "body": line + "\n\nWhy."}
+            gh.add_pr(comments=[verdict("Fable 5.2", HEAD, "SHIP", cid=1), block])
+            d = self.run_gate(gh)
+            self.assertEqual(d.conclusion, "failure", repr(line))
+            self.assertIn("malformed", d.title)
+            self.assertNotIn(("auto_merge", 1, True), gh.writes)
+
+    def test_a_malformed_block_of_an_old_change_does_not_poison_the_head(self):
+        gh = FakeGitHub()
+        gh.files[OLD] = FILES_A
+        gh.files[HEAD] = FILES_B
+        block = {**verdict("Fable 5.2", OLD, "SHIP", cid=1),
+                 "body": f"**Independent review (Fable 5.2) at {OLD[:12]}: BLOCK**"}
+        gh.add_pr(commits=[commit(OLD), commit(HEAD)],
+                  comments=[block, verdict("Fable 5.2", HEAD, "SHIP", cid=2)])
+        self.assertEqual(self.run_gate(gh).conclusion, "success")
+
+    def test_a_malformed_block_from_an_outsider_is_ignored(self):
+        gh = FakeGitHub()
+        block = {**verdict("Fable 5.2", HEAD, "SHIP", cid=2, assoc="NONE"),
+                 "body": f"**Independent review (X) at {HEAD[:12]}: BLOCK**"}
+        gh.add_pr(comments=[verdict("Fable 5.2", HEAD, "SHIP", cid=1), block])
+        self.assertEqual(self.run_gate(gh).conclusion, "success")
+
+    def test_a_block_in_a_pr_review_body_fails_the_head(self):
+        for body in (f"**Independent review (Fable 5.2) at {HEAD[:8]}: BLOCK**\n\nWhy.",
+                     f"**Independent review (Fable 5.2) at {HEAD[:12]}: BLOCK**"):
+            gh = FakeGitHub()
+            gh.add_pr(comments=[verdict("Fable 5.2", HEAD, "SHIP")])
+            gh.reviews[1] = [{"id": 9, "body": body, "author_association": "OWNER",
+                              "html_url": "https://example.invalid/r/9", "state": "COMMENTED"}]
+            self.assertEqual(self.run_gate(gh).conclusion, "failure", body)
+
+    def test_a_ship_in_a_pr_review_body_does_not_count(self):
+        # A review body's edits leave no trace in the API, so it can only block.
+        gh = FakeGitHub()
+        gh.add_pr()
+        gh.reviews[1] = [{"id": 9, "body": verdict("Fable 5.2", HEAD, "SHIP")["body"],
+                          "author_association": "OWNER", "state": "COMMENTED"}]
+        self.assertIsNone(self.run_gate(gh).conclusion)
+
+    def test_an_unattributed_commit_does_not_ride_on_an_attributed_one(self):
+        gh = FakeGitHub()
+        gh.add_pr(commits=[commit(OLD), commit(HEAD, "fix: no trailer")],
+                  comments=[verdict("Fable 5.2", HEAD, "SHIP")])
+        d = self.run_gate(gh)
+        self.assertEqual(d.conclusion, "failure")
+        self.assertIn(HEAD[:8], d.title)
+
+    def test_a_bare_claude_trailer_cannot_be_reviewed_by_any_claude(self):
+        gh = FakeGitHub()
+        gh.add_pr(commits=[commit(OLD), commit(HEAD, "x\n\nCo-Authored-By: Claude <noreply@anthropic.com>")],
+                  comments=[verdict("Fable 5.2", HEAD, "SHIP")])
+        self.assertEqual(self.run_gate(gh).conclusion, "failure")
+
+    def test_a_dependabot_pr_with_a_pushed_unattributed_commit_does_not_pass(self):
+        gh = FakeGitHub()
+        gh.add_pr(author="dependabot[bot]",
+                  commits=[commit(OLD, "build(deps): bump x", author="dependabot[bot]"),
+                           commit(HEAD, "fix: tweak", author="owner")],
+                  comments=[verdict("Opus 5.5", HEAD, "SHIP")])
+        self.assertEqual(self.run_gate(gh).conclusion, "failure")
+
+    def test_a_failing_outcome_disarms_before_the_check_is_written(self):
+        gh = FakeGitHub()
+        gh.add_pr(auto_merge={"merge_method": "squash"},
+                  comments=[verdict("Fable 5.2", HEAD, "BLOCK")])
+        self.run_gate(gh)
+        kinds = [w[0] for w in gh.writes]
+        self.assertLess(kinds.index("auto_merge"), kinds.index("create_check"))
+
+    def test_a_failed_check_write_still_leaves_the_pr_disarmed(self):
+        gh = FakeGitHub()
+        gh.add_pr(auto_merge={"merge_method": "squash"},
+                  comments=[verdict("Fable 5.2", HEAD, "BLOCK")])
+
+        def boom(sha, fields):
+            raise RuntimeError("API down")
+
+        gh.create_check = boom
+        with self.assertRaises(RuntimeError):
+            self.run_gate(gh)
+        self.assertIsNone(gh.prs[1]["auto_merge"])
+
+    def test_control_paths_never_arm(self):
+        for path in (".claude/hooks/guard-bash.sh", ".sdlc/protection.yaml", "platform/MANIFEST.yml",
+                     "ci/pipeline.yml", "test/manifest.txt", "hooks/pre-commit",
+                     "skills/x/hooks/guard.sh", ".github/CODEOWNERS"):
+            gh = FakeGitHub()
+            gh.add_pr(files=[{"filename": path, "status": "modified", "sha": "d" * 40}],
+                      comments=[verdict("Fable 5.2", HEAD, "SHIP")])
+            d = self.run_gate(gh)
+            self.assertEqual(d.conclusion, "success", path)
+            self.assertFalse(d.arm, path)
+
+    def test_every_arm_is_announced_once(self):
+        gh = FakeGitHub()
+        gh.add_pr(comments=[verdict("Fable 5.2", HEAD, "SHIP")])
+        self.run_gate(gh)
+        self.run_gate(gh)
+        notes = [w for w in gh.writes if w[0] == "comment"]
+        self.assertEqual(len(notes), 1)
+        self.assertIn("armed auto-merge", notes[0][2])
+        self.assertFalse(ar.loose_block(notes[0][2]))
+        self.assertIsNone(ar.parse_verdict(notes[0][2]))
+
 class Train(unittest.TestCase):
     """One BEHIND PR is brought up to date at a time, and only when none is in flight."""
 
@@ -528,6 +743,15 @@ class WorkflowShape(unittest.TestCase):
     def test_no_trigger_runs_with_a_pr_heads_context(self):
         self.assertNotIn("pull_request_target", self.text)
         self.assertNotIn("workflow_run", self.text)
+
+    def test_the_schedule_runs_only_where_the_operator_turned_it_on(self):
+        # A private repository pays for runner minutes: the schedule is opt-in.
+        self.assertIn("vars.AGENT_REVIEW_SCHEDULE == 'on'", self.text)
+
+    def test_an_edit_or_deletion_is_never_displaced_by_a_later_event(self):
+        # Its own concurrency group per comment: a pending run that is replaced
+        # loses the payload, and an edit or deletion's payload is the evidence.
+        self.assertIn("format('agent-review-tamper-{0}', github.event.comment.id)", self.text)
 
     def test_runs_never_interleave(self):
         self.assertIn("cancel-in-progress: false", self.text)
