@@ -955,3 +955,81 @@ function Get-MonitorFreshnessVerdict {
         LastRun = $newest; AgeDays = $age; Fresh = $false
     }
 }
+
+function ConvertTo-Ipv4Range {
+    # 'a.b.c.d/n' -> [uint64] first and last address, or $null when it is not one.
+    param([string]$Cidr)
+    if ($Cidr -notmatch '^\s*(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})/(\d{1,2})\s*$') { return $null }
+    $o = @($Matches[1], $Matches[2], $Matches[3], $Matches[4]) | ForEach-Object { [int]$_ }
+    $len = [int]$Matches[5]
+    if ($len -gt 32 -or ($o | Where-Object { $_ -gt 255 })) { return $null }
+    [uint64]$addr = ([uint64]$o[0] * 16777216) + ([uint64]$o[1] * 65536) + ([uint64]$o[2] * 256) + [uint64]$o[3]
+    [uint64]$size = [math]::Pow(2, 32 - $len)
+    [uint64]$first = $addr - ($addr % $size)
+    return [pscustomobject]@{ First = $first; Last = $first + $size - 1 }
+}
+
+function Get-RoeVerdict {
+    <#
+    .SYNOPSIS
+        May the weekly scan send packets to this CIDR? From the RoE file's text.
+
+    .DESCRIPTION
+        TheHub #62304. Fails closed: Ok is $true only when every check passes,
+        and every other path returns Ok = $false with a Reason. The RoE has no
+        cryptographic signature, so "signed" means an 'Owner and authoriser:'
+        line with a name, a parseable 'Signed:' date not in the future, and an
+        'expires:' date after it by no more than 90 days and not yet passed.
+        The target must sit inside a CIDR listed under the '## In scope'
+        heading; a CIDR named only under 'Out of scope' does not count.
+    #>
+    param(
+        [AllowNull()][string]$RoeText,
+        [string]$Cidr,
+        [datetime]$Today = (Get-Date)
+    )
+    $no = { param($why) [pscustomobject]@{ Ok = $false; Reason = $why } }
+    if ([string]::IsNullOrWhiteSpace($RoeText)) { return (& $no 'the rules of engagement file is missing or empty') }
+
+    if ($RoeText -notmatch '(?im)^\s*Owner and authoriser:[ \t]*\S') {
+        return (& $no 'no authoriser is named ("Owner and authoriser:" line is absent or empty)')
+    }
+    $signed = $null; $expires = $null
+    if ($RoeText -match '(?im)^\s*Signed:[ \t]*(\d{4}-\d{2}-\d{2})\b') {
+        try { $signed = [datetime]::ParseExact($Matches[1], 'yyyy-MM-dd', [Globalization.CultureInfo]::InvariantCulture) } catch { $signed = $null }
+    }
+    if (-not $signed) { return (& $no 'not signed (no "Signed: yyyy-MM-dd" line with a date)') }
+    if ($RoeText -match '(?im)^\s*expires:[ \t]*(\d{4}-\d{2}-\d{2})\b') {
+        try { $expires = [datetime]::ParseExact($Matches[1], 'yyyy-MM-dd', [Globalization.CultureInfo]::InvariantCulture) } catch { $expires = $null }
+    }
+    if (-not $expires) { return (& $no 'no usable "expires: yyyy-MM-dd" line') }
+    if ($signed.Date -gt $Today.Date) { return (& $no "signed date $($signed.ToString('yyyy-MM-dd')) is in the future") }
+    if ($expires.Date -le $signed.Date) { return (& $no 'expires is not after the signed date') }
+    if (($expires.Date - $signed.Date).TotalDays -gt 90) { return (& $no 'expires is more than 90 days after the signed date') }
+    if ($Today.Date -gt $expires.Date) { return (& $no "expired on $($expires.ToString('yyyy-MM-dd'))") }
+
+    $target = ConvertTo-Ipv4Range $Cidr
+    if (-not $target) { return (& $no "the target network '$Cidr' is not a valid IPv4 CIDR") }
+
+    # Only the In scope section counts.
+    $scope = ''
+    if ($RoeText -match '(?ims)^##[ \t]+In scope[^\r\n]*\r?\n(.*?)(?=^##[ \t]|\z)') { $scope = $Matches[1] }
+    $covered = $false
+    foreach ($m in [regex]::Matches($scope, '\b\d{1,3}(?:\.\d{1,3}){3}/\d{1,2}\b')) {
+        $r = ConvertTo-Ipv4Range $m.Value
+        if ($r -and $target.First -ge $r.First -and $target.Last -le $r.Last) { $covered = $true; break }
+    }
+    if (-not $covered) { return (& $no "target network $Cidr is not covered by the In scope list") }
+
+    return [pscustomobject]@{ Ok = $true; Reason = "signed $($signed.ToString('yyyy-MM-dd')), expires $($expires.ToString('yyyy-MM-dd')), covers $Cidr" }
+}
+
+function Test-IpInCidr {
+    # $true only when the IPv4 address lies inside the CIDR. Anything that does not parse is $false.
+    param([string]$Ip, [string]$Cidr)
+    if ($Ip -notmatch '^\d{1,3}(\.\d{1,3}){3}$') { return $false }
+    $r = ConvertTo-Ipv4Range $Cidr
+    $a = ConvertTo-Ipv4Range "$Ip/32"
+    if (-not $r -or -not $a) { return $false }
+    return ($a.First -ge $r.First -and $a.Last -le $r.Last)
+}
