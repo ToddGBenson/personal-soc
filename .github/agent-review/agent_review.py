@@ -27,7 +27,8 @@ WHEN THE CHECK PASSES. Every one of these must hold:
     with no version ("Claude Sonnet") matches every version. A bare "Claude"
     matches every model, so no Claude can review that change. Every commit
     needs a model trailer, except merge commits and commits authored by
-    Dependabot. An unattributed commit cannot ride on an attributed one, and
+    Dependabot (author dependabot[bot] and a signature GitHub verified: the
+    author login alone follows the commit's email). An unattributed commit cannot ride on an attributed one, and
     stripping a trailer cannot turn a self-review into an independent one.
   * No BLOCK applies to the change, and no verdict comment that applies to it
     was edited or deleted. Either one makes the check fail "sticky". A sticky
@@ -37,18 +38,31 @@ WHEN THE CHECK PASSES. Every one of these must hold:
     author's comment or review whose first non-empty line contains
     "Independent review" and "BLOCK" but is not the exact line. Strict parsing
     is right for a SHIP, since a near-miss only waits. For a BLOCK it would
-    fail open, so a near-miss fails instead. That failure is not sticky:
-    deleting or correcting the line clears it.
+    fail open, so a near-miss fails instead, in any letter case. That failure
+    is not sticky: deleting or correcting the line clears it. A builder's note
+    whose first line reads like one ("Rework after the independent review
+    (BLOCK ...)") fails the head too, until it is reworded: the safe direction.
   * The PR comes from a branch of this repository (not a fork) and targets the
     default branch.
 
-WHEN AUTO-MERGE IS ARMED. Only when the check passes and the PR is not a
-draft. The change must also touch no control path: .github/, .claude/, .sdlc/,
-platform/, ci/, any hooks/ directory, or test/manifest.txt. A change to the
-gate, a workflow, a guard hook, the protection declaration or the pipeline
-still waits for a person's merge. Every arm is announced with a comment on the
-PR, so there is a window to veto: post a BLOCK, or disable auto-merge. Every
-other outcome disarms, before the check is written.
+WHEN AUTO-MERGE IS ARMED. Only when the operator turned arming on
+(AGENT_REVIEW_ARM=on), the check passes and the PR is not a draft. With arming
+off the gate only judges: it posts the check and disarms, and never arms,
+merges or updates a branch. That is the kill switch, and the enable script sets
+it last. The change must also touch no control path: .github/, .claude/,
+.sdlc/, platform/, ci/, any hooks/ directory, or test/manifest.txt. A change to
+the gate, a workflow, a guard hook, the protection declaration or the pipeline
+still waits for a person's merge. The list is the operator's choice. It leaves
+out agent instruction files (CLAUDE.md, AGENTS.md), automation-policy.yml, the
+scripts a workflow or the pipeline runs, and the tests: a change to those
+merges itself once reviewed.
+
+An arm GitHub accepted is announced with one comment on the PR, once per head.
+A refused arm posts nothing and is tried again on the next run. The window to
+veto: post a BLOCK verdict as a comment, or disable auto-merge. The gate never
+re-arms a head it announced and a person then disarmed; a new push starts
+again. Every other outcome disarms, before the check is written. The App's own
+comments never start a run, so the announcement cannot re-run the gate.
 
 STRICT BRANCHES (the train). On every run, the gate looks for an armed PR that
 is "in flight": up to date, with no red check. If none is, it merges the
@@ -105,7 +119,7 @@ CHECK_NAME = "agent-review"
 #: A check run's external_id when it records a BLOCK or a tampered verdict.
 STICKY = "sticky"
 TRUSTED = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
-#: Authors that are not agents and carry no model trailer.
+#: Authors that are not agents and carry no model trailer (with a verified signature).
 BOT_AUTHORS = frozenset({"dependabot[bot]"})
 #: A PR touching any of these never merges itself (see CONTROL_PATH).
 CONTROL_PREFIXES = (".github/", ".claude/", ".sdlc/", "platform/", "ci/", "hooks/")
@@ -123,6 +137,10 @@ VERDICT = re.compile(
 TRAILER = re.compile(r"(?i)^\s*co-authored-by:\s*(.+?)\s*<[^>]*>\s*$")
 MODEL_FAMILY = re.compile(r"(?i)\b(claude|opus|sonnet|haiku|fable)\b")
 SHA_TOKEN = re.compile(r"(?<![0-9a-f])([0-9a-f]{7,40})(?![0-9a-f])")
+#: The hidden marker in an arm announcement: the head it armed, in full.
+ANNOUNCED = "<!-- agent-review-armed {sha} -->"
+#: Bots that are not the agent-review App (a PR-branch workflow posts as github-actions).
+OTHER_BOTS = frozenset({"github-actions[bot]", "dependabot[bot]"})
 
 
 @dataclass(frozen=True)
@@ -184,9 +202,8 @@ def _first_line(body: str | None) -> str:
 def loose_block(body: str | None) -> bool:
     """A first non-empty line that says "Independent review" and "BLOCK" but is
     not the exact verdict line: a BLOCK that missed the format."""
-    line = _first_line(body)
-    return ("independent review" in line.lower() and "BLOCK" in line
-            and parse_verdict(body) is None)
+    line = _first_line(body).lower()
+    return "independent review" in line and "block" in line and parse_verdict(body) is None
 
 
 def commit_models(message: str | None) -> set[str]:
@@ -215,15 +232,43 @@ def _paths(files) -> set[str]:
     return {p for f in files for p in (f.get("filename"), f.get("previous_filename")) if p}
 
 
+def arming_enabled(env) -> bool:
+    """The kill switch: the gate arms and merges only when the operator set
+    AGENT_REVIEW_ARM to exactly "on"."""
+    return env.get("AGENT_REVIEW_ARM") == "on"
+
+
+def _by_a_bot(comment: dict) -> bool:
+    return bool(comment.get("performed_via_github_app")) or \
+        (comment.get("user") or {}).get("type") == "Bot"
+
+
+def plan(event_name: str, event: dict, app_id: int):
+    """(PR to judge first, whether to sweep) for one workflow event. A bot's
+    comment starts nothing: the App's own announcement must not re-run the
+    gate. An edit or a deletion judges its own PR only, so it never races
+    the main run group's sweep."""
+    if event_name != "issue_comment":
+        return None, True
+    comment = event.get("comment") or {}
+    if _by_a_bot(comment):
+        return None, False
+    issue = event.get("issue") or {}
+    if issue.get("pull_request") is None:
+        return None, True
+    return issue.get("number"), event.get("action") not in ("edited", "deleted")
+
+
 def _fail(title, summary="", sticky=False):
     return Decision("failure", title, summary, sticky=sticky)
 
 
 class Gate:
-    def __init__(self, gh, repo: str, app_id: int):
+    def __init__(self, gh, repo: str, app_id: int, arming: bool = False):
         self.gh = gh
         self.repo = repo
         self.app_id = int(app_id)
+        self.arming = arming
 
     # -- reading ---------------------------------------------------------------
 
@@ -393,7 +438,9 @@ class Gate:
         if loose:
             return _fail("Blocked: a malformed BLOCK line applies to this head",
                          f"{loose[0].get('html_url', '')}. Its first line names a BLOCK but is "
-                         "not the exact verdict line. Correct or delete it, or push a fix.")
+                         "not the exact verdict line. Correct or delete it, or push a fix. A "
+                         "note that only mentions an earlier BLOCK on its first line counts "
+                         "too: reword that line.")
 
         ships = [(c, v, t) for c, v, t in reviews if v.verdict in ("SHIP", "SHIP WITH NITS")]
         if not ships:
@@ -404,12 +451,14 @@ class Gate:
         for c in commits:
             if len(c.get("parents") or []) > 1:
                 continue
-            if (c.get("author") or {}).get("login") in BOT_AUTHORS:
+            if ((c.get("author") or {}).get("login") in BOT_AUTHORS
+                    and ((c["commit"].get("verification") or {}).get("verified") is True)):
                 continue
             if not commit_models(c["commit"].get("message", "")):
                 return _fail(f"Not independent: commit {c['sha'][:8]} names no builder model",
                              "Every commit needs a `Co-Authored-By: Claude ...` trailer (merge "
-                             "commits and Dependabot's own commits excepted), so the review can "
+                             "commits and Dependabot's own signed commits excepted), so the "
+                             "review can "
                              "be shown to come from another model." + note)
         builders = builder_models(c["commit"].get("message", "") for c in commits)
         independent = [(c, v, t) for c, v, t in ships
@@ -445,6 +494,14 @@ class Gate:
         pr = self.gh.get_pr(number)
         d = self.decide(pr, event)
         head = pr["head"]["sha"]
+        announced = False
+        if self.arming and d.arm and not pr.get("auto_merge"):
+            announced = self._announced(number, head)
+            if announced:
+                # Armed and announced, and now off: a person disarmed it. A veto.
+                d = Decision(d.conclusion, d.title,
+                             d.summary + " Not armed: a person disarmed this head after the "
+                             "gate armed it. A person merges it, or a new push starts again.")
         ours = self._ours(self.gh.check_runs(head))
         if any(r.get("external_id") == STICKY for r in ours):
             # Posted by another run since this one read: it stands, unwritten.
@@ -465,15 +522,34 @@ class Gate:
                 self.gh.update_check(latest["id"], fields)
             else:
                 self.gh.create_check(head, fields)
-        if d.arm and not pr.get("auto_merge"):
-            self.gh.set_auto_merge(pr, True)
-            self.gh.comment(number, (
-                f"agent-review armed auto-merge at {head[:8]}: {d.title}.\n\n"
-                "It merges when the required checks pass. To stop it, post a BLOCK verdict "
-                "or disable auto-merge. Refs: TheHub #62342"))
+        armed = ""
+        if self.arming and d.arm and not pr.get("auto_merge") and not announced:
+            # GitHub's answer decides: a refused arm posts nothing, so it cannot loop.
+            armed = self.gh.set_auto_merge(pr, True) or ""
+            if armed:
+                self.gh.comment(number, (
+                    (f"agent-review merged {head[:8]} directly (it was already mergeable): "
+                     if armed == "merged" else f"agent-review armed auto-merge at {head[:8]}: ")
+                    + f"{d.title}.\n\n"
+                    "It merges when the required checks pass. To stop it, post a BLOCK verdict "
+                    "as a comment, or disable auto-merge: the gate does not re-arm this head "
+                    "after that. A BLOCK in a PR review is read only on the next run. "
+                    "Refs: TheHub #62342\n\n" + ANNOUNCED.format(sha=head)))
         print(f"#{number} @ {head[:8]}: {d.conclusion or 'waiting'} - {d.title}"
-              f"{' [armed]' if d.arm else ''}")
+              f"{' [' + str(armed) + ']' if armed else ''}")
         return d
+
+    def _announced(self, number: int, head: str) -> bool:
+        """Whether this App already announced an arm of this exact head."""
+        marker = ANNOUNCED.format(sha=head)
+        for c in self.gh.issue_comments(number):
+            app = (c.get("performed_via_github_app") or {}).get("id")
+            user = c.get("user") or {}
+            ours = app == self.app_id or (app is None and user.get("type") == "Bot"
+                                          and user.get("login") not in OTHER_BOTS)
+            if ours and marker in (c.get("body") or ""):
+                return True
+        return False
 
     def _red(self, sha: str) -> bool:
         return any(r.get("name") != CHECK_NAME and r.get("conclusion") in RED
@@ -494,6 +570,8 @@ class Gate:
         return self.train(judged)
 
     def train(self, judged):
+        if not self.arming:
+            return None
         ready = [self.gh.get_pr(n) for n, d in judged if d.arm]
         for pr in ready:
             if pr.get("mergeable_state") not in ("behind", "dirty") and not self._red(pr["head"]["sha"]):
@@ -627,23 +705,29 @@ class RestGitHub:
         return [e.get("message", "") for e in (data or {}).get("errors") or []]
 
     def set_auto_merge(self, pr, on):
+        """Truthy when GitHub did it: "armed", "merged" (already mergeable, so
+        merged at this exact head) or, to disarm, "disarmed". "" when refused."""
         if not on:
             errors = self._graphql("mutation($id:ID!){disablePullRequestAutoMerge("
                                    "input:{pullRequestId:$id}){clientMutationId}}", pr)
             if errors:
                 print(f"#{pr['number']}: disarm: {errors}", file=sys.stderr)
-            return
+            return "" if errors else "disarmed"
         errors = self._graphql("mutation($id:ID!){enablePullRequestAutoMerge(input:"
                                "{pullRequestId:$id,mergeMethod:SQUASH}){clientMutationId}}", pr)
-        if errors and any("clean status" in e for e in errors):
+        if not errors:
+            return "armed"
+        if any("clean status" in e for e in errors):
             # Already mergeable: GitHub refuses auto-merge then. Merge this exact head.
             try:
                 _request("PUT", f"/repos/{self.repo}/pulls/{pr['number']}/merge", self.token,
                          body={"merge_method": "squash", "sha": pr["head"]["sha"]})
+                return "merged"
             except urllib.error.HTTPError as exc:
                 print(f"#{pr['number']}: merge refused: {exc.code}", file=sys.stderr)
-        elif errors:
-            print(f"#{pr['number']}: arm: {errors}", file=sys.stderr)
+                return ""
+        print(f"#{pr['number']}: arm: {errors}", file=sys.stderr)
+        return ""
 
     def update_branch(self, number, expected_head):
         try:
@@ -662,13 +746,18 @@ def main(argv) -> int:
     repo = os.environ["GITHUB_REPOSITORY"]
     app_id = int(os.environ["AGENT_REVIEW_APP_ID"])
     token = mint_token(app_id, os.environ["AGENT_REVIEW_APP_KEY"], repo)
-    gate = Gate(RestGitHub(repo, token), repo, app_id)
     with open(os.environ["GITHUB_EVENT_PATH"], encoding="utf-8") as fh:
         event = json.load(fh)
-    name = os.environ.get("GITHUB_EVENT_NAME", "")
-    if name == "issue_comment" and (event.get("issue") or {}).get("pull_request"):
-        gate.evaluate(event["issue"]["number"], event=event)
-    gate.sweep()
+    number, sweep = plan(os.environ.get("GITHUB_EVENT_NAME", ""), event, app_id)
+    if number is None and not sweep:
+        print("a bot's comment: nothing to judge")
+        return 0
+    gate = Gate(RestGitHub(repo, token), repo, app_id, arming=arming_enabled(os.environ))
+    print(f"arming: {'on' if gate.arming else 'off (AGENT_REVIEW_ARM is not on): judging only'}")
+    if number is not None:
+        gate.evaluate(number, event=event)
+    if sweep:
+        gate.sweep()
     return 0
 
 

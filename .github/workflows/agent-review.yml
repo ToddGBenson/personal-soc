@@ -25,6 +25,11 @@
 #     BLOCK posted as a comment is read at once.
 #   * The job is skipped until the operator sets the AGENT_REVIEW_APP_ID variable
 #     (Enable-AutoMerge-62342.ps1), so before that, nothing runs and nothing fails.
+#     Until the operator also sets AGENT_REVIEW_ARM=on (the script's last step),
+#     the gate only judges: it never arms, merges or updates a branch. Deleting
+#     that variable is the kill switch, and leaves the checks running.
+#   * A bot's comment never starts the job. The gate announces each arm with a
+#     comment posted as its App, and that must not re-run the gate.
 #   * `push` to main runs the train (agent_review.py, "STRICT BRANCHES") after each
 #     merge. The schedule judges new pushes and carries a review across the train's
 #     own update within ten minutes. It runs only where the operator set
@@ -53,7 +58,8 @@ jobs:
       github.event_name != 'pull_request' &&
       vars.AGENT_REVIEW_APP_ID != '' &&
       (github.event_name != 'schedule' || vars.AGENT_REVIEW_SCHEDULE == 'on') &&
-      (github.event_name != 'issue_comment' || github.event.issue.pull_request)
+      (github.event_name != 'issue_comment' ||
+       (github.event.issue.pull_request && github.event.comment.user.type != 'Bot'))
     runs-on: ubuntu-latest
     timeout-minutes: 10
     environment: agent-review
@@ -72,6 +78,7 @@ jobs:
         env:
           AGENT_REVIEW_APP_ID: ${{ vars.AGENT_REVIEW_APP_ID }}
           AGENT_REVIEW_APP_KEY: ${{ secrets.AGENT_REVIEW_APP_KEY }}
+          AGENT_REVIEW_ARM: ${{ vars.AGENT_REVIEW_ARM }}
         run: python3 .github/agent-review/agent_review.py run
 
   # The gate's own tests, on a PR that changes it. No environment, no secrets.
