@@ -525,6 +525,10 @@ class WorkflowShape(unittest.TestCase):
         self.assertNotIn("secrets.", tests_job)
         self.assertNotIn("environment:", tests_job)
 
+    def test_no_trigger_runs_with_a_pr_heads_context(self):
+        self.assertNotIn("pull_request_target", self.text)
+        self.assertNotIn("workflow_run", self.text)
+
     def test_runs_never_interleave(self):
         self.assertIn("cancel-in-progress: false", self.text)
 

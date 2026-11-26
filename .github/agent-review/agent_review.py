@@ -517,8 +517,6 @@ def main(argv) -> int:
     name = os.environ.get("GITHUB_EVENT_NAME", "")
     if name == "issue_comment" and (event.get("issue") or {}).get("pull_request"):
         gate.evaluate(event["issue"]["number"], event=event)
-    elif name == "pull_request_target":
-        gate.evaluate(event["pull_request"]["number"])
     gate.sweep()
     return 0
 

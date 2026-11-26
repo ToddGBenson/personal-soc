@@ -4,9 +4,11 @@
 # .github/agent-review/agent_review.py. This file only decides when that code runs,
 # and that it is always the copy on the default branch:
 #
-#   * issue_comment and pull_request_target run the default branch's workflow and
-#     check out the default branch. Nothing from a pull request is executed: the
-#     gate reads the PR through the API only.
+#   * Every trigger the gate job answers runs the default branch's copy of this
+#     workflow, and the job checks out the default branch. Nothing from a pull
+#     request is executed: the gate reads the PR through the API only. There is
+#     no PR-head trigger (the platform validator prohibits it): a new push gets no
+#     check at all until the next run, and a head without the check cannot merge.
 #   * The App key is a secret of the `agent-review` environment, which deploys from
 #     the default branch only. A workflow on a PR branch (pull_request, push,
 #     workflow_dispatch on another ref) cannot reach it, so it cannot post the
@@ -19,19 +21,17 @@
 #   * The job is skipped until the operator sets the AGENT_REVIEW_APP_ID variable
 #     (Enable-AutoMerge-62342.ps1), so before that, nothing runs and nothing fails.
 #   * `push` to main runs the train (agent_review.py, "STRICT BRANCHES") after each
-#     merge, and the schedule is the backstop.
+#     merge. The schedule judges new pushes and carries a review across the train's
+#     own update within ten minutes.
 name: Agent review
 
 on:
   issue_comment:
     types: [created, edited, deleted]
-  pull_request_target:
-    types: [opened, reopened, synchronize, ready_for_review]
-    branches: [main]
   push:
     branches: [main]
   schedule:
-    - cron: "7,27,47 * * * *"
+    - cron: "*/10 * * * *"
   workflow_dispatch:
   pull_request:
     paths:
