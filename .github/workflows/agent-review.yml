@@ -1,0 +1,95 @@
+# Agent review: an agent-reviewed pull request merges itself. Refs: TheHub #62342
+#
+# The rules, and what they do and do not prove, are in
+# .github/agent-review/agent_review.py. This file only decides when that code runs,
+# and that it is always the copy on the default branch:
+#
+#   * Every trigger the gate job answers runs the default branch's copy of this
+#     workflow, and the job checks out the default branch. Nothing from a pull
+#     request is executed: the gate reads the PR through the API only. There is
+#     no PR-head trigger (the platform validator prohibits it): a new push gets no
+#     check at all until the next run, and a head without the check cannot merge.
+#   * The App key is a secret of the `agent-review` environment, which deploys from
+#     the default branch only. A workflow on a PR branch (pull_request, push,
+#     workflow_dispatch on another ref) cannot reach it, so it cannot post the
+#     App-pinned `agent-review` check.
+#   * The job is named `gate`, never `agent-review`: its own check run must not
+#     look like the gate's verdict.
+#   * Runs share one concurrency group, so they never interleave. A pending run
+#     that a later one replaces loses only its event, which is harmless for every
+#     event but an edit or a deletion: their payload (the old body) is the
+#     evidence. So each comment's edits and deletions get a group of their own,
+#     and are never displaced by another comment's events.
+#   * A BLOCK posted as a PR review is read on the next run (a comment, a push to
+#     main, or the schedule). No review trigger runs main's copy of a workflow. A
+#     BLOCK posted as a comment is read at once.
+#   * The job is skipped until the operator sets the AGENT_REVIEW_APP_ID variable
+#     (Enable-AutoMerge-62342.ps1), so before that, nothing runs and nothing fails.
+#     Until the operator also sets AGENT_REVIEW_ARM=on (the script's last step),
+#     the gate only judges: it never arms, merges or updates a branch. Deleting
+#     that variable is the kill switch, and leaves the checks running.
+#   * A bot's comment never starts the job. The gate announces each arm with a
+#     comment posted as its App, and that must not re-run the gate.
+#   * `push` to main runs the train (agent_review.py, "STRICT BRANCHES") after each
+#     merge. The schedule judges new pushes and carries a review across the train's
+#     own update within ten minutes. It runs only where the operator set
+#     AGENT_REVIEW_SCHEDULE=on: a private repository pays for every runner minute
+#     (about 4,300 a month at this interval), so there the gate runs on events only.
+name: Agent review
+
+on:
+  issue_comment:
+    types: [created, edited, deleted]
+  push:
+    branches: [main]
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - ".github/agent-review/**"
+      - ".github/workflows/agent-review.yml"
+
+permissions: {}
+
+jobs:
+  gate:
+    if: >-
+      github.event_name != 'pull_request' &&
+      vars.AGENT_REVIEW_APP_ID != '' &&
+      (github.event_name != 'schedule' || vars.AGENT_REVIEW_SCHEDULE == 'on') &&
+      (github.event_name != 'issue_comment' ||
+       (github.event.issue.pull_request && github.event.comment.user.type != 'Bot'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: agent-review
+    concurrency:
+      # An edit or deletion queues per comment; everything else queues together.
+      group: ${{ github.event_name == 'issue_comment' && (github.event.action == 'edited' || github.event.action == 'deleted') && format('agent-review-tamper-{0}', github.event.comment.id) || 'agent-review-gate' }}
+      cancel-in-progress: false
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      - name: Judge open pull requests, then run the train
+        env:
+          AGENT_REVIEW_APP_ID: ${{ vars.AGENT_REVIEW_APP_ID }}
+          AGENT_REVIEW_APP_KEY: ${{ secrets.AGENT_REVIEW_APP_KEY }}
+          AGENT_REVIEW_ARM: ${{ vars.AGENT_REVIEW_ARM }}
+        run: python3 .github/agent-review/agent_review.py run
+
+  # The gate's own tests, on a PR that changes it. No environment, no secrets.
+  tests:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - run: python3 .github/agent-review/test_agent_review.py

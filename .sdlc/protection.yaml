@@ -40,10 +40,13 @@ fields:
   allow_force_pushes:
     value: false
   required_status_checks:
-    value: [no-personal-data, skill-tests]
+    value: [agent-review, no-personal-data, skill-tests]
     reason: >-
       TheHub #61738: skill-tests (tests.yml) and no-personal-data (guard.yml)
       both run on every pull request with no paths filter, so neither can leave
       a PR unchecked. strict is false (estate exception E10): with one operator
       merging in batches, requiring every head to be up to date with main would
       force a rebase and re-run per merge.
+      agent-review is added by TheHub #62342 (Enable-AutoMerge-62342.ps1), pinned
+      to the agent-review App: an agent-reviewed PR merges itself
+      (.github/agent-review/agent_review.py).
