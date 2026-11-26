@@ -12,6 +12,7 @@ import sys
 import unittest
 from pathlib import Path
 
+sys.dont_write_bytecode = True  # no __pycache__ beside the gate
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import agent_review as ar  # noqa: E402
@@ -266,6 +267,17 @@ class Decisions(unittest.TestCase):
             gh = FakeGitHub()
             gh.add_pr(comments=[verdict(spelled, HEAD, "SHIP")])
             self.assertEqual(self.run_gate(gh).conclusion, "failure", spelled)
+
+    def test_a_trailer_without_a_version_matches_every_version(self):
+        # "Co-Authored-By: Claude Sonnet" is on real commits; a Sonnet 5.5 review is no
+        # more independent of it than a Sonnet review would be.
+        gh = FakeGitHub()
+        gh.add_pr(commits=[commit(HEAD, "a\n\nCo-Authored-By: Claude Sonnet <noreply@anthropic.com>")],
+                  comments=[verdict("Sonnet 5.5", HEAD, "SHIP")])
+        self.assertEqual(self.run_gate(gh).conclusion, "failure")
+        self.assertTrue(ar.same_model("opus", "opus-5-5"))
+        self.assertFalse(ar.same_model("opus-5-5", "opus-5-4"))
+        self.assertFalse(ar.same_model("opus-5", "fable-5"))
 
     def test_any_builder_model_counts_as_the_builder(self):
         gh = FakeGitHub()
